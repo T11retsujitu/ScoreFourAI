@@ -21,6 +21,7 @@ from collections.abc import Callable
 
 from .board import NUM_CELLS, Board
 from .evaluate import line_potential
+from .symmetry import COL_PERMS, INV_COL_PERMS, canonical
 
 # 勝敗の基準値。max 手数(64) より十分大きく取り、評価値(ヒューリスティック)の
 # 取りうる範囲とも重ならないようにする。
@@ -100,14 +101,21 @@ def negamax(
     tt: dict[int, tuple[int, int, int, int]],
     heuristic: Heuristic,
 ) -> int:
-    """alpha-beta + 着手順序 + 置換表(Zobrist) + 脅威枝刈り の negamax。
+    """alpha-beta + 着手順序 + 置換表 + 脅威枝刈り + D4対称性圧縮 の negamax。
 
     返り値は手番側視点のスコア (fail-soft)。フルウィンドウ
     (alpha=-INF, beta=INF) で根から呼べば真の minimax 値に一致する。
 
-    置換表は ``board.key`` をキーに ``(depth, value, flag, best_move)`` を持つ。
+    置換表は **D4 対称性で正規化したキー** に ``(depth, value, flag, best_move)``
+    を持つ。同じ軌道の局面が同一キーに集約され実効状態空間が約 1/8 になる。
+    値・境界は対称不変だが best_move は正規形の座標系なので、保存時は現局面 ->
+    正規形 (COL_PERMS)、読み出し時は正規形 -> 現局面 (INV_COL_PERMS) に列を写す。
     TT の値は depth が現在以上のときのみ early-return / cutoff に使い、窓の
     絞り込みには使わない (微妙なバグの温床を避ける安全形)。
+
+    前提: 対称性圧縮が健全なのは **heuristic が D4 対称不変** のときだけ
+    (同じ軌道の局面に同じ評価値を返す)。既定の line_potential は 76 ラインを
+    数えるだけで D4 不変なので満たす。非対称な評価を渡すと正規化 TT と矛盾する。
 
     脅威ベースの強制手枝刈り (健全・ゲーム値を変えない exact な枝刈り):
         - 自分に即勝ち手 → 最速勝ちを即返す (depth>=1 で全幅と一致)。
@@ -123,12 +131,13 @@ def negamax(
         return heuristic(board)
 
     alpha_orig = alpha
-    key = board.key
+    key, sym = canonical(board.bb[0], board.bb[1])
     tt_move = -1
     entry = tt.get(key)
     if entry is not None:
         e_depth, e_value, e_flag, e_move = entry
-        tt_move = e_move
+        if e_move >= 0:
+            tt_move = INV_COL_PERMS[sym][e_move]  # 正規形 -> 現局面
         if e_depth >= depth:
             if e_flag == EXACT:
                 return e_value
@@ -173,7 +182,8 @@ def negamax(
         flag = LOWER  # fail-high: best は下界
     else:
         flag = EXACT
-    tt[key] = (depth, best, flag, best_move)
+    store_move = COL_PERMS[sym][best_move] if best_move >= 0 else -1  # 現局面 -> 正規形
+    tt[key] = (depth, best, flag, store_move)
     return best
 
 
@@ -193,8 +203,9 @@ def _search_root(
     alpha = -INF
     best = -INF
     best_move = -1
-    entry = tt.get(board.key)
-    tt_move = entry[3] if entry is not None else -1
+    key, sym = canonical(board.bb[0], board.bb[1])
+    entry = tt.get(key)
+    tt_move = INV_COL_PERMS[sym][entry[3]] if entry is not None and entry[3] >= 0 else -1
     for col in _ordered_moves(board, tt_move):
         board.play(col)
         value = -negamax(board, depth - 1, -INF, -alpha, tt, heuristic)
@@ -204,7 +215,8 @@ def _search_root(
             best_move = col
         if best > alpha:
             alpha = best
-    tt[board.key] = (depth, best, EXACT, best_move)
+    store_move = COL_PERMS[sym][best_move] if best_move >= 0 else -1
+    tt[key] = (depth, best, EXACT, store_move)
     return best, best_move
 
 

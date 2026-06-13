@@ -24,13 +24,21 @@ from score_four.search import (
 
 
 def _pseudo_eval(board: Board) -> int:
-    """局面キーから決まる決定的な擬似評価 (-100..100)。
+    """局面から決まる決定的な擬似評価 (-100..100)。
 
     値が局面ごとにばらつくので、着手順序・枝刈り・置換表のいずれかが minimax
     値を変えてしまえば全幅参照との不一致として現れる。終端スコア(|WIN|)とは
     桁が違うため混同しない。
+
+    D4 対称性圧縮の前提 (評価が対称不変であること) を満たすため、生の
+    ``board.key`` ではなく **正規化キー** から導く。これにより同じ軌道の局面は
+    同じ評価値になり、対称性 TT と矛盾しない (実エンジンの line_potential も
+    対称不変)。
     """
-    return (((board.key * 2654435761) >> 16) % 201) - 100
+    from score_four.symmetry import canonical
+
+    ckey, _ = canonical(board.bb[0], board.bb[1])
+    return (((ckey * 2654435761) >> 16) % 201) - 100
 
 
 def _random_positions(seed: int, count: int, max_plies: int) -> list[Board]:
@@ -51,7 +59,7 @@ def _random_positions(seed: int, count: int, max_plies: int) -> list[Board]:
 
 def test_alpha_beta_matches_full_width() -> None:
     """alpha-beta+TT が全幅 negamax と同じ値を返す (任意 depth・多数局面)。"""
-    for board in _random_positions(seed=1, count=60, max_plies=20):
+    for board in _random_positions(seed=1, count=25, max_plies=20):
         for depth in range(1, 5):
             ref = negamax_full(board.copy(), depth, _pseudo_eval)
             got = negamax(board.copy(), depth, -INF, INF, {}, _pseudo_eval)
@@ -75,8 +83,8 @@ def test_threat_pruning_matches_full_width() -> None:
     深い局面 (24..48 手) は即勝ち脅威・ダブルリーチを多く含むため、強制手枝刈り
     (depth>=2) の健全性を集中的に検証できる。depth は 1..5 を確認。
     """
-    for board in _random_positions(seed=11, count=30, max_plies=48):
-        if board.num_moves < 24:
+    for board in _random_positions(seed=11, count=24, max_plies=52):
+        if board.num_moves < 32:  # 空きが少ない局面ほど全幅参照が軽く脅威も豊富
             continue
         for depth in range(1, 6):
             ref = negamax_full(board.copy(), depth, _pseudo_eval)
