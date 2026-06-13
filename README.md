@@ -46,15 +46,34 @@ score-four-ai/
 ├── CLAUDE.md            # Claude Code 用のプロジェクト規約・文脈
 ├── pyproject.toml
 ├── docs/
-│   ├── rules.md         # ゲームのルール
-│   └── design.md        # 設計メモ（方針の全体像）
+│   ├── rules.md             # ゲームのルール
+│   ├── design.md            # 設計メモ（方針の全体像）
+│   └── eval_measurements.md # 評価関数の自己対戦計測ログ
 ├── src/score_four/
 │   ├── board.py         # ビットボード／着手生成／勝利判定
 │   ├── lines.py         # 76 ラインの生成
-│   ├── search.py        # α-β ＋ 置換表
-│   └── evaluate.py      # 評価関数
-└── tests/
-    └── test_lines.py    # 総当たり参照実装との突き合わせ
+│   ├── symmetry.py      # D4 対称性（8 重）正規化
+│   ├── evaluate.py      # 評価関数（検証済みパリティ）
+│   ├── search.py        # α-β＋TT＋脅威枝刈り＋対称性＋反復深化＋PVS＋時間制御
+│   └── selfplay.py      # 自己対戦の計測ハーネス
+├── rust/                # コアの Rust 移植（PyO3 拡張 score_four_rs）
+│   ├── Cargo.toml
+│   ├── pyproject.toml   # maturin ビルド設定
+│   └── src/{lib,board,lines}.rs
+└── tests/               # 参照実装・契約テスト（言語横断含む）
+```
+
+### Rust コア（任意・速度用）
+
+速度が律速になるホットループを Rust へ移植中（設計 §6・段階1=コア先行）。
+拡張がなくても純 Python のスイートは独立に動く（Rust 契約テストは skip）。
+
+```sh
+cd rust
+maturin build --release
+pip install --force-reinstall --no-deps target/wheels/score_four_rs-*.whl
+# 以後 `import score_four_rs` が使え、tests/test_rust_core.py が
+# Python 参照との全局面一致を検証する。
 ```
 
 ## 開発の前提（非交渉）
@@ -64,7 +83,9 @@ score-four-ai/
 
 ## ステータス
 
-🚧 スキャフォルド段階。次の一歩は「テスト付き検証済みコア」の実装。
+検証済みコア（lines/board）＋ 探索一式（α-β・TT・脅威枝刈り・D4対称性・反復深化＋PVS・
+時間制御）＋ 計測駆動の評価（パリティ採用）まで実装済み。Rust 移植は段階1（コア）完了。
+次は探索の Rust 移植（段階2）と定石生成。
 
 ## 参考
 

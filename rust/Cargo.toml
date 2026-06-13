@@ -1,0 +1,12 @@
+[package]
+name = "score_four_rs"
+version = "0.0.1"
+edition = "2021"
+description = "Score Four (gravity 4x4x4) core engine in Rust (PyO3 extension)"
+
+[lib]
+name = "score_four_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
