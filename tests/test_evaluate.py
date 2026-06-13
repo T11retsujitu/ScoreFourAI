@@ -75,8 +75,8 @@ def test_immediate_threat_scores_above_latent_potential() -> None:
     assert threat_eval(board) < line_potential(board)
 
 
-def test_parity_eval_equals_threat_eval_when_weight_zero() -> None:
-    """parity_weight=0 なら parity_eval は threat_eval と完全一致する。"""
+def test_parity_eval_reduces_to_baselines() -> None:
+    """parity_weight=0 のとき: immediate=0 で line_potential、immediate=w で threat_eval。"""
     import random
 
     rng = random.Random(0)
@@ -88,4 +88,7 @@ def test_parity_eval_equals_threat_eval_when_weight_zero() -> None:
             board.play(rng.choice(board.legal_moves()))
         if board.is_terminal():
             continue
-        assert parity_eval(board, parity_weight=0) == threat_eval(board)
+        assert parity_eval(board, parity_weight=0, immediate=0) == line_potential(board)
+        assert parity_eval(board, parity_weight=0, immediate=40) == threat_eval(
+            board, immediate=40
+        )

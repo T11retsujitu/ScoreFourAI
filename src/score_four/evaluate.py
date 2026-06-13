@@ -96,15 +96,22 @@ def threat_eval(board: Board, immediate: int = _IMMEDIATE) -> int:
     return score if board.turn == 0 else -score
 
 
-def parity_eval(board: Board, parity_weight: int = _PARITY) -> int:
-    """threat_eval に **実験的な** 奇偶パリティ項を足した版 (要計測)。
+def parity_eval(
+    board: Board, parity_weight: int = _PARITY, immediate: int = 0
+) -> int:
+    """line_potential に **実験的な** 奇偶パリティ項 (と任意で即時脅威) を足した版。
 
     作業仮説 (docs/design.md 4.7): 3 並びの「残り 1 マスが完成する高さ z」の偶奇が
     終盤の手番の押し付け (ツークツワンク) に効きうる。ここでは各プレイヤーの未完成
-    3 並びについて、完成セルの z が偶数か奇数かを数え、その差を parity_weight 倍して
-    加える。**Connect Four の理論をそのまま移植できる保証はない**ため既定重みは 0。
+    3 並びについて、完成セルの z が奇数なら +1 / 偶数なら -1 を数え、先手 - 後手の差を
+    parity_weight 倍して先手視点スコアへ加える。正の重みは「奇数段の脅威が先手に
+    有利」という Connect Four 流の向き、負の重みは逆向きを表す。**どちらが正しいかも
+    含め未確立**なので、計測では両符号を掃引する。
 
-    parity_weight=0 なら threat_eval と完全一致する。D4 不変 (z は D4 で不変)。
+    パリティ効果を ベースライン (line_potential) 上で純粋に測れるよう、即時脅威の
+    加点は既定で 0 (= 切る)。immediate を指定すれば threat_eval 相当の加点も乗る。
+    parity_weight=0, immediate=0 なら line_potential と完全一致する。
+    D4 不変 (z は D4 で不変)。
     """
     p0, p1 = board.bb
     heights = board.heights
@@ -120,16 +127,16 @@ def parity_eval(board: Board, parity_weight: int = _PARITY) -> int:
             score += _WEIGHT[ca]
             if ca == 3:
                 e = (mask ^ a).bit_length() - 1
-                if e >> 4 == heights[e & 15]:
-                    score += _IMMEDIATE
+                if immediate and e >> 4 == heights[e & 15]:
+                    score += immediate
                 parity += 1 if (e >> 4) & 1 else -1
         elif b:
             cb = b.bit_count()
             score -= _WEIGHT[cb]
             if cb == 3:
                 e = (mask ^ b).bit_length() - 1
-                if e >> 4 == heights[e & 15]:
-                    score -= _IMMEDIATE
+                if immediate and e >> 4 == heights[e & 15]:
+                    score -= immediate
                 parity -= 1 if (e >> 4) & 1 else -1
     score += parity_weight * parity
     return score if board.turn == 0 else -score
