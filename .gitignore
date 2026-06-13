@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Engine artifacts
+*.book        # 生成した定石
+*.tt          # 置換表ダンプ
+data/
+logs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Native build (移植時)
+target/
+build/
+*.o
+*.so

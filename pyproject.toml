@@ -1,0 +1,11 @@
+[project]
+name = "score-four-ai"
+version = "0.0.1"
+description = "Score Four (gravity 4x4x4) analysis engine and opening book"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
