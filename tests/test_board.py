@@ -81,7 +81,6 @@ def test_directions_cover_13_axes() -> None:
 def test_random_games_match_reference() -> None:
     """ランダム対局を多数回し、全局面で参照実装と一致することを検証する。"""
     saw_win = False
-    saw_draw = False
     for seed in range(300):
         rng = random.Random(seed)
         board = Board()
@@ -109,8 +108,6 @@ def test_random_games_match_reference() -> None:
 
         if board.winner is not None:
             saw_win = True
-        else:
-            saw_draw = True
 
     # ランダム対局なので勝ち局面は必ず出る (引き分けは稀なので必須にしない)。
     assert saw_win
@@ -200,3 +197,54 @@ def test_not_won_when_blocked() -> None:
     """間に相手のコマが入ると勝ちにならない。"""
     board = _play_sequence([0, 0, 1, 2, 3])  # 先手は柱0(z0),1(z0)... 連続しない
     assert board.winner is None
+
+
+# --- winning_moves / has_winning_move (脅威枝刈りの土台) -----------------
+
+
+def _naive_winning_columns(board: Board, player: int) -> list[int]:
+    """参照: 各空き柱に player を試し置きして勝つかを undo で確かめる。"""
+    if board.winner is not None:
+        return []
+    cols: list[int] = []
+    for col in range(16):
+        if board.heights[col] >= 4:
+            continue
+        probe = board.copy()
+        probe.turn = player  # player の手番として試す
+        if probe.play(col):
+            cols.append(col)
+    return cols
+
+
+def test_winning_moves_match_naive_probe() -> None:
+    """ランダム局面で winning_moves が「試し置き」参照と一致する。"""
+    for seed in range(200):
+        rng = random.Random(50_000 + seed)
+        board = Board()
+        while not board.is_terminal():
+            for player in (0, 1):
+                expected = sorted(_naive_winning_columns(board, player))
+                assert sorted(board.winning_moves(player)) == expected
+                assert board.has_winning_move(player) == bool(expected)
+            board.play(rng.choice(board.legal_moves()))
+
+
+def test_winning_moves_detects_vertical_threat() -> None:
+    """柱0に先手が3つ。先手は柱0で即勝ちできる。"""
+    board = _play_sequence([0, 1, 0, 1, 0, 1])
+    assert board.winning_moves(0) == [0]
+    assert board.has_winning_move(0)
+
+
+def test_winning_moves_double_threat() -> None:
+    """先手が z=0 平面で L 字に並び、柱3 と 柱12 の両方が即勝ちになるダブルリーチ。
+
+    先手 X: 柱0,1,2 (横ライン y=0,z=0) と 柱0,4,8 (縦ライン x=0,z=0)。
+    柱3 で {0,1,2,3}、柱12 で {0,4,8,12} が完成する2柱同時脅威。
+    後手 O は脅威柱 (3,12) を避けた無関係な柱に置く。
+    """
+    board = _play_sequence([0, 5, 1, 6, 2, 7, 4, 9, 8, 10])
+    assert board.turn == 0
+    assert sorted(board.winning_moves(0)) == [3, 12]
+    assert board.has_winning_move(0)

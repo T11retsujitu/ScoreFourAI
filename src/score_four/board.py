@@ -87,6 +87,39 @@ class Board:
             return []
         return [c for c in range(NUM_COLUMNS) if self.heights[c] < N]
 
+    def _completes_line(self, player: int, idx: int) -> bool:
+        """player がセル idx に置いたら idx を通る線で4が揃うか (純粋)。"""
+        occ = self.bb[player] | (1 << idx)
+        for mask in CELL_LINES[idx]:
+            if occ & mask == mask:
+                return True
+        return False
+
+    def winning_moves(self, player: int) -> list[int]:
+        """player が今すぐ着手して4を完成できる柱の一覧 (重複なし・純粋)。
+
+        各柱は着地セルが1つだけなので、即勝ち脅威は柱ごとに高々1つ。脅威ベースの
+        強制手枝刈りで「相手の即勝ち柱」を数えるために使う。決着後は空。
+        """
+        if self.winner is not None:
+            return []
+        res: list[int] = []
+        for c in range(NUM_COLUMNS):
+            h = self.heights[c]
+            if h < N and self._completes_line(player, c + h * 16):
+                res.append(c)
+        return res
+
+    def has_winning_move(self, player: int) -> bool:
+        """player に即勝ち手が1つでもあるか (winning_moves の早期脱出版・純粋)。"""
+        if self.winner is not None:
+            return False
+        for c in range(NUM_COLUMNS):
+            h = self.heights[c]
+            if h < N and self._completes_line(player, c + h * 16):
+                return True
+        return False
+
     def is_full(self) -> bool:
         """全 64 マスが埋まっているか。"""
         return len(self._history) == NUM_CELLS

@@ -69,6 +69,41 @@ def test_alpha_beta_with_default_heuristic_matches_full_width() -> None:
             assert got == ref
 
 
+def test_threat_pruning_matches_full_width() -> None:
+    """脅威枝刈り入りの negamax が、脅威が頻出する中盤〜終盤の局面でも全幅と一致。
+
+    深い局面 (24..48 手) は即勝ち脅威・ダブルリーチを多く含むため、強制手枝刈り
+    (depth>=2) の健全性を集中的に検証できる。depth は 1..5 を確認。
+    """
+    for board in _random_positions(seed=11, count=30, max_plies=48):
+        if board.num_moves < 24:
+            continue
+        for depth in range(1, 6):
+            ref = negamax_full(board.copy(), depth, _pseudo_eval)
+            got = negamax(board.copy(), depth, -INF, INF, {}, _pseudo_eval)
+            assert got == ref, (
+                f"plies={board.num_moves} depth={depth} "
+                f"ref={ref} got={got}\n{board}"
+            )
+
+
+def test_finds_double_threat_win() -> None:
+    """フォーク (ダブルリーチを作る手) を選び、勝ちを読み切る。
+
+    z=0 平面で先手 X は 柱1,4,6,9 を持つ (まだ即勝ちは無い)。柱5 に置くと
+        - 横ライン y=1: {4,5,6,7} が X 3つ → 柱7 が脅威
+        - 縦ライン x=1: {1,5,9,13} が X 3つ → 柱13 が脅威
+    の二重脅威が生まれ、後手は両方を受けられず X 勝ち。
+    後手 O は脅威柱 (5,7,13) を避けた無関係な柱に置く。
+    """
+    board = _play([1, 2, 4, 8, 6, 11, 9, 14])  # X:1,4,6,9 / O:2,8,11,14
+    assert board.turn == 0
+    assert board.winning_moves(0) == []  # この時点では即勝ちは無い
+    score, move = search(board, 5)
+    assert move == 5
+    assert score > MATE_LO  # フォークによる強制勝ちを読み切っている
+
+
 def test_search_is_deterministic() -> None:
     """同一局面・同一引数なら常に同じ (score, move) を返す。"""
     for board in _random_positions(seed=3, count=20, max_plies=16):

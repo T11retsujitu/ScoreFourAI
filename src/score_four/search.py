@@ -100,7 +100,7 @@ def negamax(
     tt: dict[int, tuple[int, int, int, int]],
     heuristic: Heuristic,
 ) -> int:
-    """alpha-beta + 着手順序 + 置換表(Zobrist) の negamax。
+    """alpha-beta + 着手順序 + 置換表(Zobrist) + 脅威枝刈り の negamax。
 
     返り値は手番側視点のスコア (fail-soft)。フルウィンドウ
     (alpha=-INF, beta=INF) で根から呼べば真の minimax 値に一致する。
@@ -108,6 +108,13 @@ def negamax(
     置換表は ``board.key`` をキーに ``(depth, value, flag, best_move)`` を持つ。
     TT の値は depth が現在以上のときのみ early-return / cutoff に使い、窓の
     絞り込みには使わない (微妙なバグの温床を避ける安全形)。
+
+    脅威ベースの強制手枝刈り (健全・ゲーム値を変えない exact な枝刈り):
+        - 自分に即勝ち手 → 最速勝ちを即返す (depth>=1 で全幅と一致)。
+        - 相手の即勝ち脅威が2柱以上 → 受け切れず負け確定を返す (depth>=2)。
+        - 相手の即勝ち脅威が1柱 → その柱で受ける1手だけに分岐を絞る (depth>=2)。
+      depth>=2 のゲートは必須: 浅い地平線では全幅探索も2手先の決着を見ず
+      評価値を返すため、ゲートを外すと参照実装と値がずれる。
     """
     term = terminal_value(board)
     if term is not None:
@@ -130,9 +137,25 @@ def negamax(
             if e_flag == UPPER and e_value <= alpha:
                 return e_value
 
+    me = board.turn
+    # 自分の即勝ち: 最速勝ちが最善 (これ以上の値はない)。
+    if board.has_winning_move(me):
+        return WIN - (board.num_moves + 1)
+
+    # 相手の即勝ち脅威による強制手 (depth>=2 のときだけ健全)。
+    forced: list[int] | None = None
+    if depth >= 2:
+        threats = board.winning_moves(me ^ 1)
+        if len(threats) >= 2:
+            # ダブルリーチ: 自分が1手受けても相手が次手で勝つ。
+            return -(WIN - (board.num_moves + 2))
+        if threats:
+            forced = threats  # 唯一の脅威柱を受ける1手に限定。
+
+    moves = forced if forced is not None else _ordered_moves(board, tt_move)
     best = -INF
     best_move = -1
-    for col in _ordered_moves(board, tt_move):
+    for col in moves:
         board.play(col)
         value = -negamax(board, depth - 1, -beta, -alpha, tt, heuristic)
         board.undo()
@@ -161,6 +184,12 @@ def _search_root(
     heuristic: Heuristic,
 ) -> tuple[int, int]:
     """根を 1 段だけ展開し ``(score, best_move)`` を返す (フルウィンドウ)。"""
+    me = board.turn
+    wins = board.winning_moves(me)
+    if wins:
+        # 即勝ち手があればそれが最善 (最速勝ち)。先頭の柱を返す。
+        return WIN - (board.num_moves + 1), wins[0]
+
     alpha = -INF
     best = -INF
     best_move = -1
