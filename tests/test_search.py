@@ -120,6 +120,48 @@ def test_search_is_deterministic() -> None:
         assert a == b
 
 
+# --- 反復深化 + 時間制御 -------------------------------------------------
+
+
+def test_time_limit_returns_valid_move_and_preserves_board() -> None:
+    """短い時間制御でも合法手を返し、入力盤面を破壊しない。"""
+    import time
+
+    board = _play([5, 6, 9, 10, 0])  # 適当な非終端局面
+    snapshot = (list(board.bb), bytes(board.heights), board.turn, board.num_moves)
+    start = time.monotonic()
+    score, move = search(board, 64, time_limit=0.3)
+    elapsed = time.monotonic() - start
+
+    assert move in board.legal_moves()
+    assert elapsed < 2.0  # 締切(0.3s)から大きく超過しない
+    # コピー上で探索するので呼び出し側の盤面は不変。
+    assert (list(board.bb), bytes(board.heights), board.turn, board.num_moves) == snapshot
+
+
+def test_tiny_time_limit_still_returns_depth1_move() -> None:
+    """極端に短い締切でも深さ1は完走し、合法手を返す。"""
+    board = Board()
+    score, move = search(board, 64, time_limit=1e-6)
+    assert move in board.legal_moves()
+
+
+def test_time_limit_not_binding_matches_unlimited() -> None:
+    """十分な時間 + 浅い max_depth なら、時間制御なしと同じ結果になる。"""
+    for board in _random_positions(seed=21, count=10, max_plies=14):
+        ref = search(board.copy(), 4)
+        timed = search(board.copy(), 4, time_limit=30.0)
+        assert ref == timed
+
+
+def test_immediate_win_ignores_time_limit() -> None:
+    """即勝ちは深さ1 (時間制御外) で即決し、勝ちスコアを返す。"""
+    board = _play([0, 1, 0, 1, 0, 1])  # 先手が柱0で即勝ち
+    score, move = search(board, 64, time_limit=1e-6)
+    assert move == 0
+    assert score > MATE_LO
+
+
 # --- 終端スコアリング ----------------------------------------------------
 
 
