@@ -95,3 +95,54 @@ def test_time_limit_returns_legal_move() -> None:
 def rs_mate_lo() -> int:
     # search.rs の MATE_LO = WIN - 64 - 1
     return 1_000_000 - 64 - 1
+
+
+# --- 精緻化パリティ特徴 (実験用) の D4 不変性とハーネス整合 -----------------
+
+# (parity_weight, immediate, parity_mode): mode 0=ALL, 1=LOWEST, 2=REACHABLE
+_EVAL_CONFIGS = [
+    (0, 0, 0),     # ベースライン (line_potential)
+    (-8, 0, 0),    # ALL (既定)
+    (-8, 0, 1),    # LOWEST
+    (-8, 0, 2),    # REACHABLE
+    (-8, 12, 0),   # ALL + 即時脅威
+]
+
+
+def test_all_eval_modes_are_d4_invariant() -> None:
+    """新しいパリティモードを含む全評価が D4 不変 (対称性 TT の前提)。"""
+    from score_four.symmetry import COL_PERMS
+
+    def image(seq: list[int], t: int) -> Board:
+        b = Board()
+        for c in seq:
+            b.play(COL_PERMS[t][c])
+        return b
+
+    rng = random.Random(9)
+    for _ in range(40):
+        seq: list[int] = []
+        b = Board()
+        for _ in range(rng.randint(1, 30)):
+            if b.is_terminal():
+                break
+            c = rng.choice(b.legal_moves())
+            b.play(c)
+            seq.append(c)
+        if b.is_terminal():
+            continue
+        for pw, imm, mode in _EVAL_CONFIGS:
+            base = rs.eval_cfg(b.bb[0], b.bb[1], pw, imm, mode)
+            for t in range(8):
+                im = image(seq, t)
+                assert rs.eval_cfg(im.bb[0], im.bb[1], pw, imm, mode) == base
+
+
+def test_play_match_consistency() -> None:
+    """同一評価同士は左右対称で勝ち数一致。総局数 = openings*2。"""
+    from score_four.selfplay import random_openings
+
+    openings = [list(o) for o in random_openings(12, 6, seed=5)]
+    aw, bw, dr = rs.play_match((-8, 0, 0), (-8, 0, 0), openings, 3)
+    assert aw == bw  # 同一評価なので先後入替で対称
+    assert aw + bw + dr == len(openings) * 2

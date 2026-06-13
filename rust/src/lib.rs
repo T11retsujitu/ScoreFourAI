@@ -12,6 +12,7 @@ mod search;
 mod symmetry;
 
 use board::Board;
+use evaluate::EvalConfig;
 
 /// 全 76 本の勝利ラインを (i0, i1, i2, i3) のタプル列で返す (Python の all_lines と一致)。
 #[pyfunction]
@@ -106,6 +107,18 @@ fn py_eval_default(b0: u64, b1: u64) -> i64 {
     evaluate::default_eval(&Board::from_bitboards(b0, b1))
 }
 
+/// 設定 (parity_weight, immediate, parity_mode) での評価値 (D4不変性テスト用)。
+#[pyfunction]
+#[pyo3(name = "eval_cfg")]
+fn py_eval_cfg(b0: u64, b1: u64, parity_weight: i64, immediate: i64, parity_mode: u8) -> i64 {
+    let cfg = EvalConfig {
+        parity_weight,
+        immediate,
+        parity_mode,
+    };
+    evaluate::eval_with(&Board::from_bitboards(b0, b1), &cfg)
+}
+
 /// 全幅ウィンドウの negamax 値 (fresh TT)。Python negamax(full window) と一致。
 #[pyfunction]
 #[pyo3(name = "negamax_value")]
@@ -113,19 +126,56 @@ fn py_negamax_value(b0: u64, b1: u64, depth: u8) -> i64 {
     search::negamax_value(b0, b1, depth)
 }
 
-/// 反復深化 + 時間制御で (score, best_move)。Python search と一致 (time_limit=None 時)。
+/// 反復深化 + 時間制御 + 評価設定で (score, best_move)。
+/// 既定 (parity_weight=-8, immediate=0, parity_mode=0) で Python search と一致。
 #[pyfunction]
-#[pyo3(name = "search", signature = (b0, b1, max_depth, time_limit=None))]
-fn py_search(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> (i64, i64) {
-    let (score, mv) = search::search_position(b0, b1, max_depth, time_limit);
+#[pyo3(name = "search", signature = (b0, b1, max_depth, time_limit=None, parity_weight=-8, immediate=0, parity_mode=0))]
+fn py_search(
+    b0: u64,
+    b1: u64,
+    max_depth: u8,
+    time_limit: Option<f64>,
+    parity_weight: i64,
+    immediate: i64,
+    parity_mode: u8,
+) -> (i64, i64) {
+    let cfg = EvalConfig {
+        parity_weight,
+        immediate,
+        parity_mode,
+    };
+    let (score, mv) = search::search_with_cfg(b0, b1, max_depth, time_limit, cfg);
     (score, mv as i64)
 }
 
-/// search の最善手だけを返す。
+/// search の最善手だけを返す (既定評価)。
 #[pyfunction]
 #[pyo3(name = "best_move", signature = (b0, b1, max_depth, time_limit=None))]
 fn py_best_move(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> i64 {
     search::search_position(b0, b1, max_depth, time_limit).1 as i64
+}
+
+/// 評価 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
+/// cfg は (parity_weight, immediate, parity_mode)。openings は柱番号の列のリスト。
+#[pyfunction]
+#[pyo3(name = "play_match")]
+fn py_play_match(
+    cfg_a: (i64, i64, u8),
+    cfg_b: (i64, i64, u8),
+    openings: Vec<Vec<u8>>,
+    depth: u8,
+) -> (u32, u32, u32) {
+    let a = EvalConfig {
+        parity_weight: cfg_a.0,
+        immediate: cfg_a.1,
+        parity_mode: cfg_a.2,
+    };
+    let b = EvalConfig {
+        parity_weight: cfg_b.0,
+        immediate: cfg_b.1,
+        parity_mode: cfg_b.2,
+    };
+    search::play_match(a, b, &openings, depth)
 }
 
 #[pymodule]
@@ -133,9 +183,11 @@ fn score_four_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_lines, m)?)?;
     m.add_function(wrap_pyfunction!(py_canonical, m)?)?;
     m.add_function(wrap_pyfunction!(py_eval_default, m)?)?;
+    m.add_function(wrap_pyfunction!(py_eval_cfg, m)?)?;
     m.add_function(wrap_pyfunction!(py_negamax_value, m)?)?;
     m.add_function(wrap_pyfunction!(py_search, m)?)?;
     m.add_function(wrap_pyfunction!(py_best_move, m)?)?;
+    m.add_function(wrap_pyfunction!(py_play_match, m)?)?;
     m.add_class::<RustBoard>()?;
     Ok(())
 }

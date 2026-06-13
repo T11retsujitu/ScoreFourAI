@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::board::Board;
-use crate::evaluate::default_eval;
+use crate::evaluate::{eval_with, EvalConfig};
 use crate::symmetry::{canonical, col_perms, inv_col_perms};
 
 pub const WIN: i64 = 1_000_000;
@@ -75,14 +75,16 @@ struct Searcher {
     tt: HashMap<u128, TtEntry>,
     deadline: Option<Instant>,
     nodes: u64,
+    cfg: EvalConfig,
 }
 
 impl Searcher {
-    fn new(deadline: Option<Instant>) -> Self {
+    fn new(deadline: Option<Instant>, cfg: EvalConfig) -> Self {
         Searcher {
             tt: HashMap::new(),
             deadline,
             nodes: 0,
+            cfg,
         }
     }
 
@@ -107,7 +109,7 @@ impl Searcher {
             return Ok(t);
         }
         if depth == 0 {
-            return Ok(default_eval(board));
+            return Ok(eval_with(board, &self.cfg));
         }
         self.check()?;
 
@@ -266,20 +268,26 @@ impl Searcher {
     }
 }
 
-/// 全幅ウィンドウの negamax 値 (fresh TT, 時間制御なし)。Python negamax の契約用。
+/// 全幅ウィンドウの negamax 値 (fresh TT, 時間制御なし, 既定評価)。Python negamax の契約用。
 pub fn negamax_value(b0: u64, b1: u64, depth: u8) -> i64 {
     let mut board = Board::from_bitboards(b0, b1);
-    let mut searcher = Searcher::new(None);
+    let mut searcher = Searcher::new(None, EvalConfig::default_config());
     searcher.negamax(&mut board, depth, -INF, INF).unwrap_or(0) // 時間制御なしなので必ず Ok
 }
 
-/// 反復深化 + 時間制御で (score, best_move) を返す。非終端局面のみ。
-pub fn search_position(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> (i64, i32) {
+/// 反復深化 + 時間制御 + 評価設定 cfg で (score, best_move) を返す。非終端局面のみ。
+pub fn search_with_cfg(
+    b0: u64,
+    b1: u64,
+    max_depth: u8,
+    time_limit: Option<f64>,
+    cfg: EvalConfig,
+) -> (i64, i32) {
     let mut board = Board::from_bitboards(b0, b1);
     let deadline = time_limit.map(|s| Instant::now() + Duration::from_secs_f64(s));
 
     // 深さ1 は無条件に完走 (最低限の手を保証)。
-    let mut searcher = Searcher::new(None);
+    let mut searcher = Searcher::new(None, cfg);
     let (mut score, mut mv) = searcher.search_root(&mut board, 1).unwrap_or((0, -1));
     if score.abs() > MATE_LO || max_depth <= 1 {
         return (score, mv);
@@ -306,4 +314,54 @@ pub fn search_position(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>)
         depth += 1;
     }
     (score, mv)
+}
+
+/// 既定評価での反復深化 + 時間制御。
+pub fn search_position(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> (i64, i32) {
+    search_with_cfg(b0, b1, max_depth, time_limit, EvalConfig::default_config())
+}
+
+/// opening から打ち継ぎ、先手=cfg0 / 後手=cfg1 の評価で固定深さ対局し勝者を返す。
+fn play_game(opening: &[u8], cfg0: EvalConfig, cfg1: EvalConfig, depth: u8) -> Option<u8> {
+    let mut board = Board::new();
+    for &c in opening {
+        board.play(c as usize).unwrap();
+    }
+    while !board.is_terminal() {
+        let cfg = if board.turn == 0 { cfg0 } else { cfg1 };
+        // 各手で fresh TT 探索 (Python ハーネスと同じ意味論)。
+        let (_, mv) = search_with_cfg(board.bb[0], board.bb[1], depth, None, cfg);
+        let col = if mv >= 0 {
+            mv as usize
+        } else {
+            board.legal_moves()[0] as usize
+        };
+        board.play(col).unwrap();
+    }
+    board.winner
+}
+
+/// 評価 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
+///
+/// 各 opening を先後入れ替えて 2 局 (A先手/B後手 と B先手/A後手) 打ち、先手有利を相殺。
+pub fn play_match(
+    cfg_a: EvalConfig,
+    cfg_b: EvalConfig,
+    openings: &[Vec<u8>],
+    depth: u8,
+) -> (u32, u32, u32) {
+    let (mut aw, mut bw, mut dr) = (0u32, 0u32, 0u32);
+    for opening in openings {
+        match play_game(opening, cfg_a, cfg_b, depth) {
+            Some(0) => aw += 1,
+            Some(1) => bw += 1,
+            _ => dr += 1,
+        }
+        match play_game(opening, cfg_b, cfg_a, depth) {
+            Some(0) => bw += 1,
+            Some(1) => aw += 1,
+            _ => dr += 1,
+        }
+    }
+    (aw, bw, dr)
 }
