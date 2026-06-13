@@ -1,11 +1,12 @@
 """evaluate.py の基本性質テスト。
 
-評価関数はまだ第一次ヒューリスティック (ライン potential) なので、強さ自体は
-保証しない。ここでは「純粋関数であること」「手番対称性」「脅威が多い側を
-正しく優位と判定すること」など、壊れていないことの最低限を確認する。
+評価関数の強さ自体は自己対戦 (selfplay.py) で測る。ここでは「純粋関数である
+こと」「手番対称性」「脅威が多い側を正しく優位と判定すること」「即時脅威の
+加点」「parity_weight=0 で threat_eval と一致」など、壊れていないことの最低限を
+確認する。D4 対称不変性は test_symmetry.py で全評価について検証する。
 """
 from score_four.board import Board
-from score_four.evaluate import line_potential
+from score_four.evaluate import line_potential, parity_eval, threat_eval
 
 
 def _play(columns: list[int]) -> Board:
@@ -45,3 +46,46 @@ def test_advantage_for_more_threats() -> None:
     board = _play([0, 12, 1, 13, 2])
     assert board.turn == 1
     assert line_potential(board) < 0
+
+
+# --- threat_eval / parity_eval -------------------------------------------
+
+
+def test_threat_eval_is_pure() -> None:
+    board = _play([0, 5, 1, 6])
+    before = (board.bb[0], board.bb[1], board.turn, list(board.heights))
+    threat_eval(board)
+    after = (board.bb[0], board.bb[1], board.turn, list(board.heights))
+    assert before == after
+
+
+def test_threat_eval_empty_is_neutral() -> None:
+    assert threat_eval(Board()) == 0
+
+
+def test_immediate_threat_scores_above_latent_potential() -> None:
+    """今すぐ詰められる3並び (即時脅威) は、同じ3並びでも latent 評価より高い。
+
+    手番=後手の局面で、先手が z=0 横 (柱0,1,2) を持ち柱3 が即着手可能 = 即時脅威。
+    threat_eval は line_potential より (後手視点で) さらに負に振れる。
+    """
+    board = _play([0, 12, 1, 13, 2])  # 先手 0,1,2(z0) / 後手 12,13 / 手番=後手
+    assert board.turn == 1
+    # 先手の即時脅威 (柱3) があるぶん、threat_eval の方が後手に厳しい。
+    assert threat_eval(board) < line_potential(board)
+
+
+def test_parity_eval_equals_threat_eval_when_weight_zero() -> None:
+    """parity_weight=0 なら parity_eval は threat_eval と完全一致する。"""
+    import random
+
+    rng = random.Random(0)
+    for _ in range(60):
+        board = Board()
+        for _ in range(rng.randint(1, 30)):
+            if board.is_terminal():
+                break
+            board.play(rng.choice(board.legal_moves()))
+        if board.is_terminal():
+            continue
+        assert parity_eval(board, parity_weight=0) == threat_eval(board)

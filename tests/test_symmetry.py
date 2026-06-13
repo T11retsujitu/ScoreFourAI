@@ -125,6 +125,38 @@ def test_line_potential_is_symmetry_invariant() -> None:
             assert line_potential(image) == base
 
 
+def test_all_evaluations_are_symmetry_invariant() -> None:
+    """全評価関数 (line_potential / threat_eval / parity_eval) が D4 不変。
+
+    探索が D4 正規化キーで TT を共有するための必須契約。即時脅威・パリティは
+    高さ z に依存するが z は D4 で不変なので保たれる。
+    """
+    from score_four.evaluate import parity_eval, threat_eval
+
+    evals = [
+        line_potential,
+        threat_eval,
+        lambda b: parity_eval(b, parity_weight=7),  # 非ゼロ重みでも不変
+    ]
+    rng = random.Random(20)
+    for _ in range(60):
+        seq: list[int] = []
+        board = Board()
+        for _ in range(rng.randint(1, 36)):
+            if board.is_terminal():
+                break
+            col = rng.choice(board.legal_moves())
+            board.play(col)
+            seq.append(col)
+        if board.is_terminal():
+            continue
+        for ev in evals:
+            base = ev(board)
+            for t in range(8):
+                image = _play([COL_PERMS[t][c] for c in seq])
+                assert ev(image) == base
+
+
 def test_search_score_invariant_under_symmetry() -> None:
     """探索スコアが対称像で一致する (既定の対称不変ヒューリスティック)。"""
     rng = random.Random(3)
