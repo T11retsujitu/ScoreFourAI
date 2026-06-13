@@ -84,8 +84,9 @@ pip install --force-reinstall --no-deps target/wheels/score_four_rs-*.whl
 ## ステータス
 
 検証済みコア（lines/board）＋ 探索一式（α-β・TT・脅威枝刈り・D4対称性・反復深化＋PVS・
-時間制御）＋ 計測駆動の評価（パリティ採用）まで実装済み。Rust 移植は段階1（コア）完了。
-次は探索の Rust 移植（段階2）と定石生成。
+時間制御）＋ 計測駆動の評価（パリティ採用）まで実装済み。Rust 移植は段階1（コア）＋
+段階2（symmetry/evaluate/search）完了し、Python 探索と同値を言語横断契約テストで保証
+（探索は Python 比 約50〜60倍）。次は定石生成。
 
 ## 参考
 

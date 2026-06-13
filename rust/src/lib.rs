@@ -6,7 +6,10 @@
 use pyo3::prelude::*;
 
 mod board;
+mod evaluate;
 mod lines;
+mod search;
+mod symmetry;
 
 use board::Board;
 
@@ -89,9 +92,50 @@ impl RustBoard {
     }
 }
 
+/// 局面 (b0,b1) の D4 正規化キーと変換 t (Python の canonical と一致)。
+#[pyfunction]
+#[pyo3(name = "canonical")]
+fn py_canonical(b0: u64, b1: u64) -> (u128, usize) {
+    symmetry::canonical(b0, b1)
+}
+
+/// 既定評価 default_eval の値 (手番側視点)。Python の default_eval と一致。
+#[pyfunction]
+#[pyo3(name = "eval_default")]
+fn py_eval_default(b0: u64, b1: u64) -> i64 {
+    evaluate::default_eval(&Board::from_bitboards(b0, b1))
+}
+
+/// 全幅ウィンドウの negamax 値 (fresh TT)。Python negamax(full window) と一致。
+#[pyfunction]
+#[pyo3(name = "negamax_value")]
+fn py_negamax_value(b0: u64, b1: u64, depth: u8) -> i64 {
+    search::negamax_value(b0, b1, depth)
+}
+
+/// 反復深化 + 時間制御で (score, best_move)。Python search と一致 (time_limit=None 時)。
+#[pyfunction]
+#[pyo3(name = "search", signature = (b0, b1, max_depth, time_limit=None))]
+fn py_search(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> (i64, i64) {
+    let (score, mv) = search::search_position(b0, b1, max_depth, time_limit);
+    (score, mv as i64)
+}
+
+/// search の最善手だけを返す。
+#[pyfunction]
+#[pyo3(name = "best_move", signature = (b0, b1, max_depth, time_limit=None))]
+fn py_best_move(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> i64 {
+    search::search_position(b0, b1, max_depth, time_limit).1 as i64
+}
+
 #[pymodule]
 fn score_four_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_lines, m)?)?;
+    m.add_function(wrap_pyfunction!(py_canonical, m)?)?;
+    m.add_function(wrap_pyfunction!(py_eval_default, m)?)?;
+    m.add_function(wrap_pyfunction!(py_negamax_value, m)?)?;
+    m.add_function(wrap_pyfunction!(py_search, m)?)?;
+    m.add_function(wrap_pyfunction!(py_best_move, m)?)?;
     m.add_class::<RustBoard>()?;
     Ok(())
 }

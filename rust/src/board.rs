@@ -15,12 +15,18 @@ fn tables() -> &'static LineTables {
     TABLES.get_or_init(build_line_tables)
 }
 
+/// 76 ラインのビットマスク (評価関数の全ライン走査用)。
+pub fn line_masks() -> &'static [u64] {
+    &tables().line_masks
+}
+
 #[derive(Clone)]
 pub struct Board {
     pub bb: [u64; 2],
     pub heights: [u8; NUM_COLUMNS],
     pub turn: u8,
     pub winner: Option<u8>,
+    moves_played: usize,            // 盤上のコマ総数 (復元局面でも正しく持つ)
     history: Vec<(u8, Option<u8>)>, // (column, 着手前の winner)
 }
 
@@ -37,16 +43,44 @@ impl Board {
             heights: [0; NUM_COLUMNS],
             turn: 0,
             winner: None,
+            moves_played: 0,
+            history: Vec::new(),
+        }
+    }
+
+    /// ビットボード (b0, b1) から非終端局面を復元する (探索の入口で使う)。
+    ///
+    /// 高さは各柱の占有数、手番は総コマ数の偶奇で一意。winner は None 前提
+    /// (非終端の入力でのみ呼ぶ)。history は空 (探索が打つ手だけ undo 対象になる)。
+    pub fn from_bitboards(b0: u64, b1: u64) -> Self {
+        let occ = b0 | b1;
+        let mut heights = [0u8; NUM_COLUMNS];
+        for (c, h) in heights.iter_mut().enumerate() {
+            let mut count = 0u8;
+            for z in 0..4 {
+                if occ & (1u64 << (c + z * 16)) != 0 {
+                    count += 1;
+                }
+            }
+            *h = count;
+        }
+        let moves_played = occ.count_ones() as usize;
+        Board {
+            bb: [b0, b1],
+            heights,
+            turn: (moves_played & 1) as u8,
+            winner: None,
+            moves_played,
             history: Vec::new(),
         }
     }
 
     pub fn num_moves(&self) -> usize {
-        self.history.len()
+        self.moves_played
     }
 
     pub fn is_full(&self) -> bool {
-        self.history.len() == NUM_CELLS
+        self.moves_played == NUM_CELLS
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -120,6 +154,7 @@ impl Board {
         self.bb[player] |= 1u64 << idx;
         self.heights[column] = h + 1;
         self.history.push((column as u8, self.winner));
+        self.moves_played += 1;
         let won = self.wins_through(player, idx);
         if won {
             self.winner = Some(self.turn);
@@ -137,6 +172,7 @@ impl Board {
         self.heights[column] = h;
         let idx = column + (h as usize) * 16;
         self.bb[player] &= !(1u64 << idx);
+        self.moves_played -= 1;
         self.winner = prev_winner;
     }
 }

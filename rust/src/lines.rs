@@ -66,8 +66,6 @@ pub fn all_lines() -> Vec<[usize; 4]> {
 
 /// 76 ラインのビットマスクと、各セルを通るラインの一覧。
 pub struct LineTables {
-    // line_masks は段階2 (評価・全局面走査) で使う。段階1 では cell_lines のみ使用。
-    #[allow(dead_code)]
     pub line_masks: Vec<u64>,
     /// cell_lines[idx] = セル idx を含むラインマスク (増分勝利判定用)。
     pub cell_lines: Vec<Vec<u64>>,
