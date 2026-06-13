@@ -1,0 +1,140 @@
+"""search.py の契約テスト (センサー先行)。
+
+中核の不変条件: alpha-beta + 置換表版 `negamax` は、枝刈りなしの全幅参照
+実装 `negamax_full` と **必ず同じ値** を返す。任意の決定的ヒューリスティック
+について成り立つべき性質なので、局面に依存する擬似ヒューリスティックで
+ランダム局面・各 depth を総当たり的に突き合わせる。
+
+さらに即詰み (勝ち1手) を見つける・相手の即詰みを受ける、といった戦術的な
+既知局面で best_move を検証する。
+"""
+import random
+
+from score_four.board import Board
+from score_four.search import (
+    INF,
+    MATE_LO,
+    WIN,
+    best_move,
+    negamax,
+    negamax_full,
+    search,
+    terminal_value,
+)
+
+
+def _pseudo_eval(board: Board) -> int:
+    """局面キーから決まる決定的な擬似評価 (-100..100)。
+
+    値が局面ごとにばらつくので、着手順序・枝刈り・置換表のいずれかが minimax
+    値を変えてしまえば全幅参照との不一致として現れる。終端スコア(|WIN|)とは
+    桁が違うため混同しない。
+    """
+    return (((board.key * 2654435761) >> 16) % 201) - 100
+
+
+def _random_positions(seed: int, count: int, max_plies: int) -> list[Board]:
+    """ランダムに数手進めた非終端局面を集める。"""
+    rng = random.Random(seed)
+    boards: list[Board] = []
+    for _ in range(count):
+        board = Board()
+        plies = rng.randint(0, max_plies)
+        for _ in range(plies):
+            if board.is_terminal():
+                break
+            board.play(rng.choice(board.legal_moves()))
+        if not board.is_terminal():
+            boards.append(board)
+    return boards
+
+
+def test_alpha_beta_matches_full_width() -> None:
+    """alpha-beta+TT が全幅 negamax と同じ値を返す (任意 depth・多数局面)。"""
+    for board in _random_positions(seed=1, count=60, max_plies=20):
+        for depth in range(1, 5):
+            ref = negamax_full(board.copy(), depth, _pseudo_eval)
+            got = negamax(board.copy(), depth, -INF, INF, {}, _pseudo_eval)
+            assert got == ref, f"depth={depth} ref={ref} got={got}\n{board}"
+
+
+def test_alpha_beta_with_default_heuristic_matches_full_width() -> None:
+    """既定ヒューリスティック (line_potential) でも全幅と一致する。"""
+    from score_four.evaluate import line_potential
+
+    for board in _random_positions(seed=7, count=40, max_plies=24):
+        for depth in range(1, 4):
+            ref = negamax_full(board.copy(), depth, line_potential)
+            got = negamax(board.copy(), depth, -INF, INF, {}, line_potential)
+            assert got == ref
+
+
+def test_search_is_deterministic() -> None:
+    """同一局面・同一引数なら常に同じ (score, move) を返す。"""
+    for board in _random_positions(seed=3, count=20, max_plies=16):
+        a = search(board.copy(), 4, _pseudo_eval)
+        b = search(board.copy(), 4, _pseudo_eval)
+        assert a == b
+
+
+# --- 終端スコアリング ----------------------------------------------------
+
+
+def test_terminal_value_none_for_open_position() -> None:
+    assert terminal_value(Board()) is None
+
+
+def test_terminal_value_loss_for_side_to_move() -> None:
+    """勝敗が付いた局面では、手番側 (= 負けた側) に負のスコア。"""
+    board = Board()
+    for col in [0, 1, 0, 1, 0, 1, 0]:  # 先手が柱0に縦4
+        board.play(col)
+    assert board.winner == 0
+    # 手番は敗者(後手=1)。負の終端値。
+    assert board.turn == 1
+    value = terminal_value(board)
+    assert value is not None and value < -MATE_LO
+
+
+# --- 戦術的な既知局面 ----------------------------------------------------
+
+
+def _play(columns: list[int]) -> Board:
+    board = Board()
+    for col in columns:
+        board.play(col)
+    return board
+
+
+def test_finds_immediate_vertical_win() -> None:
+    """先手が柱0に3つ。手番の先手は柱0で即勝ちを選ぶ。"""
+    board = _play([0, 1, 0, 1, 0, 1])  # p0: 柱0 z0..z2 / p1: 柱1 z0..z2
+    assert board.turn == 0
+    score, move = search(board, 2)
+    assert move == 0
+    assert score > MATE_LO  # 勝ちを読み切っている
+
+
+def test_blocks_opponent_immediate_win() -> None:
+    """相手(先手)が柱0に3つでリーチ。手番の後手は柱0を受けるしかない。"""
+    board = _play([0, 1, 0, 1, 0])  # p0: 柱0 z0..z2 (リーチ) / p1: 柱1 z0..z1
+    assert board.turn == 1
+    move = best_move(board, 4)
+    assert move == 0
+
+
+def test_finds_horizontal_win_in_one() -> None:
+    """z=0 平面で先手が柱0,1,2。柱3で即勝ち。"""
+    board = _play([0, 4, 1, 5, 2, 6])  # p0: 柱0,1,2(z0) / p1: 柱4,5,6(z0)
+    assert board.turn == 0
+    score, move = search(board, 2)
+    assert move == 3
+    assert score > MATE_LO
+
+
+def test_win_score_prefers_faster_mate() -> None:
+    """即勝ち局面のスコアは WIN 近傍 (手数で目減りした分だけ WIN 未満)。"""
+    board = _play([0, 1, 0, 1, 0, 1])
+    score, _ = search(board, 2)
+    # 1手で詰むので num_moves=7 で勝ち -> WIN - 7。
+    assert score == WIN - 7

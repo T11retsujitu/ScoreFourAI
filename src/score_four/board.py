@@ -12,6 +12,8 @@
 いれば、そのセルがその色のコマで埋まっている。
 """
 
+import random as _random
+
 from .lines import all_lines
 
 N = 4
@@ -42,6 +44,19 @@ def _build_line_tables() -> tuple[list[int], list[tuple[int, ...]]]:
 LINE_MASKS, CELL_LINES = _build_line_tables()
 
 
+def _build_zobrist() -> list[list[int]]:
+    """各 (色, セル) に割り当てる 64bit 乱数表を構築する。
+
+    置換表のキーに使う増分ハッシュ用。乱数はシード固定で、同一バイナリでは
+    常に同じ表になる (CLAUDE.md: 探索の非決定性はテストで排除)。
+    """
+    rng = _random.Random(0x5C04E_F0E4)
+    return [[rng.getrandbits(64) for _ in range(NUM_CELLS)] for _ in range(2)]
+
+
+ZOBRIST = _build_zobrist()
+
+
 def landing_cell(column: int, height: int) -> int:
     """柱 column の現在の高さ height のとき、次に落ちるコマのセルインデックス。"""
     return column + height * 16
@@ -54,13 +69,14 @@ class Board:
     (探索の make/unmake 用)。勝敗は属性 `winner` (None / 0 / 1) で持つ。
     """
 
-    __slots__ = ("bb", "heights", "turn", "winner", "_history")
+    __slots__ = ("bb", "heights", "turn", "winner", "key", "_history")
 
     def __init__(self) -> None:
         self.bb: list[int] = [0, 0]
         self.heights = bytearray(NUM_COLUMNS)  # 各柱に積まれたコマ数 0..4
         self.turn: int = 0  # 手番のプレイヤー (0 = 先手)
         self.winner: int | None = None
+        self.key: int = 0  # Zobrist ハッシュ (占有のみ; 手番は手数の偶奇で一意)
         self._history: list[tuple[int, int | None]] = []  # (column, 着手前の winner)
 
     # --- 照会 (純粋) -----------------------------------------------------
@@ -100,6 +116,7 @@ class Board:
         player = self.turn
         idx = column + height * 16
         self.bb[player] |= 1 << idx
+        self.key ^= ZOBRIST[player][idx]
         self.heights[column] = height + 1
         self._history.append((column, self.winner))
 
@@ -118,6 +135,7 @@ class Board:
         self.heights[column] = height
         idx = column + height * 16
         self.bb[player] &= ~(1 << idx)
+        self.key ^= ZOBRIST[player][idx]
         self.winner = prev_winner
 
     # --- 勝利判定 (増分) -------------------------------------------------
@@ -139,6 +157,7 @@ class Board:
         new.heights = bytearray(self.heights)
         new.turn = self.turn
         new.winner = self.winner
+        new.key = self.key
         new._history = self._history.copy()
         return new
 
