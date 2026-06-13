@@ -29,7 +29,7 @@ import time
 from collections.abc import Callable
 
 from .board import NUM_CELLS, Board
-from .evaluate import line_potential
+from .evaluate import default_eval
 from .symmetry import COL_PERMS, INV_COL_PERMS, canonical
 
 # 勝敗の基準値。max 手数(64) より十分大きく取り、評価値(ヒューリスティック)の
@@ -145,8 +145,9 @@ def negamax(
     絞り込みには使わない (微妙なバグの温床を避ける安全形)。
 
     前提: 対称性圧縮が健全なのは **heuristic が D4 対称不変** のときだけ
-    (同じ軌道の局面に同じ評価値を返す)。既定の line_potential は 76 ラインを
-    数えるだけで D4 不変なので満たす。非対称な評価を渡すと正規化 TT と矛盾する。
+    (同じ軌道の局面に同じ評価値を返す)。既定の default_eval (パリティ付き) は
+    76 ライン・高さ・パリティのみに依存し D4 不変なので満たす。非対称な評価を
+    渡すと正規化 TT と矛盾する。
 
     脅威ベースの強制手枝刈り (健全・ゲーム値を変えない exact な枝刈り):
         - 自分に即勝ち手 → 最速勝ちを即返す (depth>=1 で全幅と一致)。
@@ -276,7 +277,7 @@ def _search_root(
 def search(
     board: Board,
     max_depth: int,
-    heuristic: Heuristic = line_potential,
+    heuristic: Heuristic = default_eval,
     tt: dict[int, tuple[int, int, int, int]] | None = None,
     time_limit: float | None = None,
 ) -> tuple[int, int]:
@@ -321,7 +322,7 @@ def search(
 def best_move(
     board: Board,
     max_depth: int,
-    heuristic: Heuristic = line_potential,
+    heuristic: Heuristic = default_eval,
     time_limit: float | None = None,
 ) -> int:
     """``search`` の最善手だけを返す薄いラッパ。"""

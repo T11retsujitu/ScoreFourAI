@@ -6,7 +6,13 @@
 確認する。D4 対称不変性は test_symmetry.py で全評価について検証する。
 """
 from score_four.board import Board
-from score_four.evaluate import line_potential, parity_eval, threat_eval
+from score_four.evaluate import (
+    _PARITY,
+    default_eval,
+    line_potential,
+    parity_eval,
+    threat_eval,
+)
 
 
 def _play(columns: list[int]) -> Board:
@@ -92,3 +98,20 @@ def test_parity_eval_reduces_to_baselines() -> None:
         assert parity_eval(board, parity_weight=0, immediate=40) == threat_eval(
             board, immediate=40
         )
+
+
+def test_default_eval_is_tuned_parity() -> None:
+    """探索の既定評価 = 検証済み重み (_PARITY=-8) のパリティ評価。"""
+    import random
+
+    assert _PARITY == -8  # docs/eval_measurements.md で採用した値
+    rng = random.Random(1)
+    for _ in range(40):
+        board = Board()
+        for _ in range(rng.randint(1, 28)):
+            if board.is_terminal():
+                break
+            board.play(rng.choice(board.legal_moves()))
+        if board.is_terminal():
+            continue
+        assert default_eval(board) == parity_eval(board, parity_weight=_PARITY, immediate=0)

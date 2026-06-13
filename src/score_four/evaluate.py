@@ -27,11 +27,13 @@ from .board import LINE_MASKS, Board
 _WEIGHT = (0, 1, 5, 25, 0)
 
 # 即時脅威 (3並びで、残り1マスが今すぐ着手できる柱の着地点) への加点。
-# 相手に応手を強制するので、まだ着手できない高さの3並びより価値が高い。
+# 計測の結果ベースラインを頑健には改善しなかったため、既定の探索評価には使わない。
 _IMMEDIATE = 40
 
-# 実験的なパリティ項の既定重み。未検証のため既定では 0 (= 無効)。
-_PARITY = 0
+# パリティ項の既定重み。自己対戦で検証済み (docs/eval_measurements.md):
+# 負の重み = 「偶数段(0,2)の脅威が先手有利 / 奇数段(1,3)が後手有利」が depth3/4 で
+# 一貫してベースラインに勝つ (depth4 で winrate 0.57)。-8 を採用。
+_PARITY = -8
 
 
 def line_potential(board: Board) -> int:
@@ -140,3 +142,12 @@ def parity_eval(
                 parity -= 1 if (e >> 4) & 1 else -1
     score += parity_weight * parity
     return score if board.turn == 0 else -score
+
+
+def default_eval(board: Board) -> int:
+    """探索が既定で使う評価。検証済みパリティ項付き (= parity_eval, 重み _PARITY)。
+
+    自己対戦でベースライン line_potential に一貫して勝った構成 (docs 参照)。
+    D4 不変なので探索の対称性圧縮 TT と矛盾しない。
+    """
+    return parity_eval(board)
