@@ -102,6 +102,9 @@ struct Searcher {
     tt: Tt,
     deadline: Option<Instant>,
     nodes: u64,
+    tt_hits: u64,
+    tt_cutoffs: u64,
+    beta_cutoffs: u64,
     cfg: EvalConfig,
 }
 
@@ -111,6 +114,9 @@ impl Searcher {
             tt: Tt::default(),
             deadline,
             nodes: 0,
+            tt_hits: 0,
+            tt_cutoffs: 0,
+            beta_cutoffs: 0,
             cfg,
         }
     }
@@ -144,17 +150,21 @@ impl Searcher {
         let (key, sym) = canonical(board.bb[0], board.bb[1]);
         let mut tt_move: i32 = -1;
         if let Some(&(e_depth, e_value, e_flag, e_move)) = self.tt.get(&key) {
+            self.tt_hits += 1;
             if e_move >= 0 {
                 tt_move = inv_col_perms()[sym][e_move as usize] as i32; // 正規形 -> 現局面
             }
             if e_depth >= depth {
                 if e_flag == EXACT {
+                    self.tt_cutoffs += 1;
                     return Ok(e_value);
                 }
                 if e_flag == LOWER && e_value >= beta {
+                    self.tt_cutoffs += 1;
                     return Ok(e_value);
                 }
                 if e_flag == UPPER && e_value <= alpha {
+                    self.tt_cutoffs += 1;
                     return Ok(e_value);
                 }
             }
@@ -215,6 +225,7 @@ impl Searcher {
                 alpha = best;
             }
             if alpha >= beta {
+                self.beta_cutoffs += 1;
                 break; // beta カット
             }
             first = false;
@@ -341,6 +352,107 @@ pub fn search_with_cfg(
         depth += 1;
     }
     (score, mv)
+}
+
+/// 探索の統計付き結果 (analyze の返り値)。qnodes は Phase2 (quiescence) 用の予約。
+pub struct SearchResult {
+    pub score: i64,
+    pub best_move: i32,
+    pub completed_depth: u8,
+    pub nodes: u64,
+    pub qnodes: u64,
+    pub tt_hits: u64,
+    pub tt_cutoffs: u64,
+    pub beta_cutoffs: u64,
+    pub elapsed_ms: u64,
+    pub pv: Vec<u8>,
+}
+
+/// 置換表をルートから最善手で辿り PV (合法手列) を抽出する。
+fn extract_pv(tt: &Tt, b0: u64, b1: u64, max_len: usize) -> Vec<u8> {
+    let mut pv = Vec::new();
+    let mut board = Board::from_bitboards(b0, b1);
+    for _ in 0..max_len {
+        if board.is_terminal() {
+            break;
+        }
+        let (key, sym) = canonical(board.bb[0], board.bb[1]);
+        let entry = match tt.get(&key) {
+            Some(e) => *e,
+            None => break,
+        };
+        let cmove = entry.3;
+        if cmove < 0 {
+            break;
+        }
+        let mv = inv_col_perms()[sym][cmove as usize] as u8;
+        if board.heights[mv as usize] >= 4 {
+            break; // 念のため非合法は止める
+        }
+        pv.push(mv);
+        board.play(mv as usize).unwrap();
+    }
+    pv
+}
+
+/// 反復深化 + 時間制御で探索し、統計と PV 付きの SearchResult を返す。
+///
+/// (score, best_move) は同条件の search_with_cfg と一致する (加算的; 値は不変)。
+pub fn analyze_with_cfg(
+    b0: u64,
+    b1: u64,
+    max_depth: u8,
+    time_limit: Option<f64>,
+    cfg: EvalConfig,
+) -> SearchResult {
+    let start = Instant::now();
+    let mut board = Board::from_bitboards(b0, b1);
+    let deadline = time_limit.map(|s| start + Duration::from_secs_f64(s));
+
+    let mut searcher = Searcher::new(None, cfg);
+    let (mut score, mut mv) = searcher.search_root(&mut board, 1).unwrap_or((0, -1));
+    let mut completed: u8 = 1;
+
+    if !(score.abs() > MATE_LO || max_depth <= 1) {
+        searcher.deadline = deadline;
+        let mut depth = 2u8;
+        while depth <= max_depth {
+            if let Some(d) = deadline {
+                if Instant::now() >= d {
+                    break;
+                }
+            }
+            match searcher.search_root(&mut board, depth) {
+                Ok((s, m)) => {
+                    score = s;
+                    mv = m;
+                    completed = depth;
+                }
+                Err(_) => break,
+            }
+            if score.abs() > MATE_LO {
+                break;
+            }
+            depth += 1;
+        }
+    }
+
+    let mut pv = extract_pv(&searcher.tt, b0, b1, 32);
+    if pv.is_empty() && mv >= 0 {
+        pv.push(mv as u8); // 即勝ち短絡など TT 未保存のケース
+    }
+    SearchResult {
+        score,
+        best_move: mv,
+        completed_depth: completed,
+        nodes: searcher.nodes,
+        qnodes: 0,
+        tt_hits: searcher.tt_hits,
+        tt_cutoffs: searcher.tt_cutoffs,
+        beta_cutoffs: searcher.beta_cutoffs,
+        elapsed_ms: start.elapsed().as_millis() as u64,
+        pv,
+    }
 }
 
 /// 既定評価での反復深化 + 時間制御。

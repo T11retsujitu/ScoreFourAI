@@ -2,6 +2,7 @@
 //! wasm ビルドでは無効化される (pyo3 は wasm32 をターゲットにできないため)。
 
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::board::Board;
 use crate::evaluate::EvalConfig;
@@ -164,6 +165,33 @@ fn py_best_move(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> i64
     search::search_position(b0, b1, max_depth, time_limit).1 as i64
 }
 
+/// 既定評価で反復深化探索し、統計と PV 付きの結果を dict で返す (ベンチマーク/解析用)。
+/// (score, best_move) は同条件の search と一致する (加算的; 値は不変)。
+#[pyfunction]
+#[pyo3(name = "analyze", signature = (b0, b1, max_depth, time_limit=None))]
+fn py_analyze<'py>(
+    py: Python<'py>,
+    b0: u64,
+    b1: u64,
+    max_depth: u8,
+    time_limit: Option<f64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let r = search::analyze_with_cfg(b0, b1, max_depth, time_limit, EvalConfig::default_config());
+    let d = PyDict::new(py);
+    d.set_item("score", r.score)?;
+    d.set_item("best_move", r.best_move)?;
+    d.set_item("completed_depth", r.completed_depth)?;
+    d.set_item("nodes", r.nodes)?;
+    d.set_item("qnodes", r.qnodes)?;
+    d.set_item("tt_hits", r.tt_hits)?;
+    d.set_item("tt_cutoffs", r.tt_cutoffs)?;
+    d.set_item("beta_cutoffs", r.beta_cutoffs)?;
+    d.set_item("elapsed_ms", r.elapsed_ms)?;
+    let pv: Vec<i64> = r.pv.iter().map(|&x| x as i64).collect();
+    d.set_item("pv", pv)?;
+    Ok(d)
+}
+
 /// 評価 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
 /// cfg は (parity_weight, immediate, parity_mode, w1, w2, w3)。
 #[pyfunction]
@@ -191,6 +219,7 @@ fn score_four_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_negamax_value, m)?)?;
     m.add_function(wrap_pyfunction!(py_search, m)?)?;
     m.add_function(wrap_pyfunction!(py_best_move, m)?)?;
+    m.add_function(wrap_pyfunction!(py_analyze, m)?)?;
     m.add_function(wrap_pyfunction!(py_play_match, m)?)?;
     m.add_class::<RustBoard>()?;
     Ok(())
