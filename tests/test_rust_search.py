@@ -65,6 +65,26 @@ def test_search_matches_python() -> None:
             assert (ps, pm) == (rsc, rsm), f"depth={depth} py={(ps, pm)} rs={(rsc, rsm)}\n{b}"
 
 
+def test_quiescence_matches_python() -> None:
+    """脅威静穏化 (qdepth>0) でも Rust と Python が一致する (Phase 2 契約)。
+
+    Python 側 quiescence は遅いので浅い depth・少数局面で確認する。
+    """
+    from score_four.search import INF
+    from score_four.search import negamax as py_negamax
+
+    for b in _random_nonterminal(7, 12, 18):
+        for qd in (2, 4):
+            # negamax 値 (全幅, fresh TT) の一致
+            rv = rs.negamax_value(b.bb[0], b.bb[1], 4, qd)
+            pv = py_negamax(b.copy(), 4, -INF, INF, {}, default_eval, None, qd)
+            assert rv == pv, f"negamax qd={qd} rs={rv} py={pv}\n{b}"
+            # 反復深化 search の (score, best_move) の一致
+            rsc, rsm = rs.search(b.bb[0], b.bb[1], 5, None, -8, 0, 0, 1, 5, 25, qd)
+            ps, pm = py_search(b.copy(), 5, qdepth=qd)
+            assert (rsc, rsm) == (ps, pm), f"search qd={qd}\n{b}"
+
+
 def _play(columns: list[int]) -> Board:
     b = Board()
     for col in columns:

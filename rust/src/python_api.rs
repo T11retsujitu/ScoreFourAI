@@ -129,17 +129,17 @@ fn py_eval_cfg(
     evaluate::eval_with(&Board::from_bitboards(b0, b1), &cfg)
 }
 
-/// 全幅ウィンドウの negamax 値 (fresh TT)。Python negamax(full window) と一致。
+/// 全幅ウィンドウの negamax 値 (fresh TT, 静穏化 qdepth)。Python negamax と一致。
 #[pyfunction]
-#[pyo3(name = "negamax_value")]
-fn py_negamax_value(b0: u64, b1: u64, depth: u8) -> i64 {
-    search::negamax_value(b0, b1, depth)
+#[pyo3(name = "negamax_value", signature = (b0, b1, depth, qdepth=0))]
+fn py_negamax_value(b0: u64, b1: u64, depth: u8, qdepth: u8) -> i64 {
+    search::negamax_value(b0, b1, depth, qdepth)
 }
 
-/// 反復深化 + 時間制御 + 評価設定で (score, best_move)。
-/// 既定 (-8, 0, 0, 1, 5, 25) で Python search と一致。
+/// 反復深化 + 時間制御 + 評価設定 + 静穏化 qdepth で (score, best_move)。
+/// 既定 (-8,0,0,1,5,25, qdepth=0) で Python search と一致。
 #[pyfunction]
-#[pyo3(name = "search", signature = (b0, b1, max_depth, time_limit=None, parity_weight=-8, immediate=0, parity_mode=0, w1=1, w2=5, w3=25))]
+#[pyo3(name = "search", signature = (b0, b1, max_depth, time_limit=None, parity_weight=-8, immediate=0, parity_mode=0, w1=1, w2=5, w3=25, qdepth=0))]
 #[allow(clippy::too_many_arguments)]
 fn py_search(
     b0: u64,
@@ -152,9 +152,10 @@ fn py_search(
     w1: i64,
     w2: i64,
     w3: i64,
+    qdepth: u8,
 ) -> (i64, i64) {
     let cfg = cfg_from_tuple((parity_weight, immediate, parity_mode, w1, w2, w3));
-    let (score, mv) = search::search_with_cfg(b0, b1, max_depth, time_limit, cfg);
+    let (score, mv) = search::search_with_cfg(b0, b1, max_depth, time_limit, cfg, qdepth);
     (score, mv as i64)
 }
 
@@ -168,15 +169,23 @@ fn py_best_move(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> i64
 /// 既定評価で反復深化探索し、統計と PV 付きの結果を dict で返す (ベンチマーク/解析用)。
 /// (score, best_move) は同条件の search と一致する (加算的; 値は不変)。
 #[pyfunction]
-#[pyo3(name = "analyze", signature = (b0, b1, max_depth, time_limit=None))]
+#[pyo3(name = "analyze", signature = (b0, b1, max_depth, time_limit=None, qdepth=0))]
 fn py_analyze<'py>(
     py: Python<'py>,
     b0: u64,
     b1: u64,
     max_depth: u8,
     time_limit: Option<f64>,
+    qdepth: u8,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let r = search::analyze_with_cfg(b0, b1, max_depth, time_limit, EvalConfig::default_config());
+    let r = search::analyze_with_cfg(
+        b0,
+        b1,
+        max_depth,
+        time_limit,
+        EvalConfig::default_config(),
+        qdepth,
+    );
     let d = PyDict::new(py);
     d.set_item("score", r.score)?;
     d.set_item("best_move", r.best_move)?;
@@ -192,21 +201,28 @@ fn py_analyze<'py>(
     Ok(d)
 }
 
-/// 評価 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
-/// cfg は (parity_weight, immediate, parity_mode, w1, w2, w3)。
+/// 評価/静穏化 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
+/// cfg は (parity_weight, immediate, parity_mode, w1, w2, w3)。time_ms>0 で固定時間対局。
 #[pyfunction]
-#[pyo3(name = "play_match")]
+#[pyo3(name = "play_match", signature = (cfg_a, cfg_b, openings, depth, time_ms=0, qdepth_a=0, qdepth_b=0))]
+#[allow(clippy::too_many_arguments)]
 fn py_play_match(
     cfg_a: (i64, i64, u8, i64, i64, i64),
     cfg_b: (i64, i64, u8, i64, i64, i64),
     openings: Vec<Vec<u8>>,
     depth: u8,
+    time_ms: u32,
+    qdepth_a: u8,
+    qdepth_b: u8,
 ) -> (u32, u32, u32) {
     search::play_match(
         cfg_from_tuple(cfg_a),
+        qdepth_a,
         cfg_from_tuple(cfg_b),
+        qdepth_b,
         &openings,
         depth,
+        time_ms,
     )
 }
 

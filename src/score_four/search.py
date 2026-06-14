@@ -101,22 +101,92 @@ def _ordered_moves(board: Board, tt_move: int) -> list[int]:
     return moves
 
 
-def negamax_full(board: Board, depth: int, heuristic: Heuristic) -> int:
+def fork_moves(board: Board, player: int) -> list[int]:
+    """player の「ダブルリーチ生成手」: 着手後に player の即勝ちが2柱以上、かつ相手の
+    即勝ちが0になる手。相手にも即勝ちが生じればフォークは成立しないので除外する。
+
+    着手で手番は相手へ移るが、winning_moves は player を明示するので問題ない。
+    着手・取り消しのみの一時操作で、board は呼び出し後に完全復元される。
+    """
+    opp = player ^ 1
+    res: list[int] = []
+    for col in board.legal_moves():
+        board.play(col)
+        if (
+            board.winner is None
+            and not board.winning_moves(opp)
+            and len(board.winning_moves(player)) >= 2
+        ):
+            res.append(col)
+        board.undo()
+    return res
+
+
+def quiescence(board: Board, qdepth: int, heuristic: Heuristic) -> int:
+    """脅威の静穏化探索 (Threat Quiescence)。depth==0 の葉で qdepth>0 のとき呼ぶ。
+
+    強制手 (即勝ち・唯一の受け・ダブルリーチ生成) だけを qdepth まで延長して読み、
+    静穏なら静的評価を返す。**窓 (alpha/beta) を使わない純粋関数**なので、negamax と
+    negamax_full で同一の葉値になり、言語横断・全幅契約を保てる。D4 不変。
+    """
+    term = terminal_value(board)
+    if term is not None:
+        return term
+    me = board.turn
+    # 自分の即勝ち。
+    if board.has_winning_move(me):
+        return WIN - (board.num_moves + 1)
+    opp_threats = board.winning_moves(me ^ 1)
+    # 相手のダブル即勝ち → 受け切れず負け。
+    if len(opp_threats) >= 2:
+        return -(WIN - (board.num_moves + 2))
+    # 相手の唯一の即勝ち → その柱を受ける1手だけ延長 (静穏ではない)。
+    if len(opp_threats) == 1:
+        if qdepth == 0:
+            return heuristic(board)
+        board.play(opp_threats[0])
+        value = -quiescence(board, qdepth - 1, heuristic)
+        board.undo()
+        return value
+    # 脅威なし = 静穏。静的評価を下限に、ダブルリーチ生成手だけ延長。
+    stand_pat = heuristic(board)
+    if qdepth == 0:
+        return stand_pat
+    best = stand_pat
+    for col in fork_moves(board, me):
+        board.play(col)
+        value = -quiescence(board, qdepth - 1, heuristic)
+        board.undo()
+        if value > best:
+            best = value
+    return best
+
+
+def _leaf(board: Board, heuristic: Heuristic, qdepth: int) -> int:
+    """depth==0 の葉評価。qdepth>0 なら脅威静穏化、0 なら従来の静的評価。"""
+    if qdepth > 0:
+        return quiescence(board, qdepth, heuristic)
+    return heuristic(board)
+
+
+def negamax_full(
+    board: Board, depth: int, heuristic: Heuristic, qdepth: int = 0
+) -> int:
     """枝刈り・置換表なしの全幅 negamax (参照実装)。
 
-    alpha-beta 版が返す値の **基準**。両者が同一局面・同一 depth・同一
-    heuristic で必ず一致することを契約テストで保証する。
+    alpha-beta 版が返す値の **基準**。両者が同一局面・同一 depth・同一 heuristic・
+    同一 qdepth で必ず一致することを契約テストで保証する。
     """
     term = terminal_value(board)
     if term is not None:
         return term
     if depth == 0:
-        return heuristic(board)
+        return _leaf(board, heuristic, qdepth)
 
     best = -INF
     for col in board.legal_moves():
         board.play(col)
-        value = -negamax_full(board, depth - 1, heuristic)
+        value = -negamax_full(board, depth - 1, heuristic, qdepth)
         board.undo()
         if value > best:
             best = value
@@ -131,6 +201,7 @@ def negamax(
     tt: dict[int, tuple[int, int, int, int]],
     heuristic: Heuristic,
     clock: "_Clock | None" = None,
+    qdepth: int = 0,
 ) -> int:
     """alpha-beta + 着手順序 + 置換表 + 脅威枝刈り + D4対称性 + PVS の negamax。
 
@@ -163,7 +234,7 @@ def negamax(
     if term is not None:
         return term
     if depth == 0:
-        return heuristic(board)
+        return _leaf(board, heuristic, qdepth)
     if clock is not None:
         clock.tick()
 
@@ -205,13 +276,17 @@ def negamax(
     for col in moves:
         board.play(col)
         if first:
-            value = -negamax(board, depth - 1, -beta, -alpha, tt, heuristic, clock)
+            value = -negamax(board, depth - 1, -beta, -alpha, tt, heuristic, clock, qdepth)
         else:
             # scout: 幅0のヌルウィンドウで「alpha を超えるか」だけ確かめる。
-            value = -negamax(board, depth - 1, -alpha - 1, -alpha, tt, heuristic, clock)
+            value = -negamax(
+                board, depth - 1, -alpha - 1, -alpha, tt, heuristic, clock, qdepth
+            )
             if alpha < value < beta:
                 # PV を更新しうる手。正確な値を得るため全幅で再探索。
-                value = -negamax(board, depth - 1, -beta, -alpha, tt, heuristic, clock)
+                value = -negamax(
+                    board, depth - 1, -beta, -alpha, tt, heuristic, clock, qdepth
+                )
         board.undo()
         if value > best:
             best = value
@@ -239,6 +314,7 @@ def _search_root(
     tt: dict[int, tuple[int, int, int, int]],
     heuristic: Heuristic,
     clock: "_Clock | None" = None,
+    qdepth: int = 0,
 ) -> tuple[int, int]:
     """根を 1 段だけ PVS 展開し ``(score, best_move)`` を返す (フルウィンドウ)。"""
     me = board.turn
@@ -257,11 +333,15 @@ def _search_root(
     for col in _ordered_moves(board, tt_move):
         board.play(col)
         if first:
-            value = -negamax(board, depth - 1, -INF, -alpha, tt, heuristic, clock)
+            value = -negamax(board, depth - 1, -INF, -alpha, tt, heuristic, clock, qdepth)
         else:
-            value = -negamax(board, depth - 1, -alpha - 1, -alpha, tt, heuristic, clock)
+            value = -negamax(
+                board, depth - 1, -alpha - 1, -alpha, tt, heuristic, clock, qdepth
+            )
             if value > alpha:  # 根では beta=INF なので上限ガードは不要。
-                value = -negamax(board, depth - 1, -INF, -alpha, tt, heuristic, clock)
+                value = -negamax(
+                    board, depth - 1, -INF, -alpha, tt, heuristic, clock, qdepth
+                )
         board.undo()
         if value > best:
             best = value
@@ -280,6 +360,7 @@ def search(
     heuristic: Heuristic = default_eval,
     tt: dict[int, tuple[int, int, int, int]] | None = None,
     time_limit: float | None = None,
+    qdepth: int = 0,
 ) -> tuple[int, int]:
     """反復深化 + 時間制御で ``(score, best_move)`` を返す (手番側視点)。
 
@@ -290,6 +371,8 @@ def search(
     その反復を破棄して **直前に完了した反復の結果** を返す。深さ1は必ず完走
     させるので、どれだけ締切が短くても最低限の手は返る。盤面は破壊しないよう
     コピー上で探索する。
+
+    qdepth>0 で葉に脅威静穏化 (Threat Quiescence) を入れる。既定 0 は従来の静的評価。
 
     決定的: time_limit=None なら同一局面・同一引数で常に同じ手を返す。
     """
@@ -302,7 +385,7 @@ def search(
     deadline = time.monotonic() + time_limit if time_limit is not None else None
 
     # 深さ1は無条件に完走 (最低限の手を保証)。
-    score, move = _search_root(work, 1, tt, heuristic)
+    score, move = _search_root(work, 1, tt, heuristic, None, qdepth)
     if abs(score) > MATE_LO:
         return score, move
 
@@ -311,7 +394,7 @@ def search(
             break
         clock = _Clock(deadline) if deadline is not None else None
         try:
-            score, move = _search_root(work, depth, tt, heuristic, clock)
+            score, move = _search_root(work, depth, tt, heuristic, clock, qdepth)
         except _Timeout:
             break  # 途中の反復は破棄し、直前に完了した結果を返す
         if abs(score) > MATE_LO:
@@ -324,6 +407,7 @@ def best_move(
     max_depth: int,
     heuristic: Heuristic = default_eval,
     time_limit: float | None = None,
+    qdepth: int = 0,
 ) -> int:
     """``search`` の最善手だけを返す薄いラッパ。"""
-    return search(board, max_depth, heuristic, time_limit=time_limit)[1]
+    return search(board, max_depth, heuristic, time_limit=time_limit, qdepth=qdepth)[1]

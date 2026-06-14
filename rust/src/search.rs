@@ -102,22 +102,91 @@ struct Searcher {
     tt: Tt,
     deadline: Option<Instant>,
     nodes: u64,
+    qnodes: u64,
     tt_hits: u64,
     tt_cutoffs: u64,
     beta_cutoffs: u64,
     cfg: EvalConfig,
+    qdepth: u8,
 }
 
 impl Searcher {
-    fn new(deadline: Option<Instant>, cfg: EvalConfig) -> Self {
+    fn new(deadline: Option<Instant>, cfg: EvalConfig, qdepth: u8) -> Self {
         Searcher {
             tt: Tt::default(),
             deadline,
             nodes: 0,
+            qnodes: 0,
             tt_hits: 0,
             tt_cutoffs: 0,
             beta_cutoffs: 0,
             cfg,
+            qdepth,
+        }
+    }
+
+    /// player のダブルリーチ生成手 (Python fork_moves と同一)。
+    fn fork_moves(board: &mut Board, player: usize) -> Vec<u8> {
+        let opp = player ^ 1;
+        let mut res = Vec::new();
+        for col in board.legal_moves() {
+            board.play(col as usize).unwrap();
+            if board.winner.is_none()
+                && board.winning_moves(opp).is_empty()
+                && board.winning_moves(player).len() >= 2
+            {
+                res.push(col);
+            }
+            board.undo();
+        }
+        res
+    }
+
+    /// 脅威の静穏化探索 (Python quiescence と同一・窓非依存・純粋)。
+    fn quiescence(&mut self, board: &mut Board, qd: u8) -> i64 {
+        self.qnodes += 1;
+        if let Some(t) = terminal_value(board) {
+            return t;
+        }
+        let me = board.turn as usize;
+        if board.has_winning_move(me) {
+            return WIN - (board.num_moves() as i64 + 1);
+        }
+        let opp_threats = board.winning_moves(me ^ 1);
+        if opp_threats.len() >= 2 {
+            return -(WIN - (board.num_moves() as i64 + 2));
+        }
+        if opp_threats.len() == 1 {
+            if qd == 0 {
+                return eval_with(board, &self.cfg);
+            }
+            board.play(opp_threats[0] as usize).unwrap();
+            let v = -self.quiescence(board, qd - 1);
+            board.undo();
+            return v;
+        }
+        let stand_pat = eval_with(board, &self.cfg);
+        if qd == 0 {
+            return stand_pat;
+        }
+        let mut best = stand_pat;
+        for col in Self::fork_moves(board, me) {
+            board.play(col as usize).unwrap();
+            let v = -self.quiescence(board, qd - 1);
+            board.undo();
+            if v > best {
+                best = v;
+            }
+        }
+        best
+    }
+
+    /// depth==0 の葉評価。qdepth>0 なら脅威静穏化、0 なら静的評価。
+    fn leaf(&mut self, board: &mut Board) -> i64 {
+        if self.qdepth > 0 {
+            self.quiescence(board, self.qdepth)
+        } else {
+            eval_with(board, &self.cfg)
         }
     }
 
@@ -142,7 +211,7 @@ impl Searcher {
             return Ok(t);
         }
         if depth == 0 {
-            return Ok(eval_with(board, &self.cfg));
+            return Ok(self.leaf(board));
         }
         self.check()?;
 
@@ -307,25 +376,26 @@ impl Searcher {
 }
 
 /// 全幅ウィンドウの negamax 値 (fresh TT, 時間制御なし, 既定評価)。Python negamax の契約用。
-pub fn negamax_value(b0: u64, b1: u64, depth: u8) -> i64 {
+pub fn negamax_value(b0: u64, b1: u64, depth: u8, qdepth: u8) -> i64 {
     let mut board = Board::from_bitboards(b0, b1);
-    let mut searcher = Searcher::new(None, EvalConfig::default_config());
+    let mut searcher = Searcher::new(None, EvalConfig::default_config(), qdepth);
     searcher.negamax(&mut board, depth, -INF, INF).unwrap_or(0) // 時間制御なしなので必ず Ok
 }
 
-/// 反復深化 + 時間制御 + 評価設定 cfg で (score, best_move) を返す。非終端局面のみ。
+/// 反復深化 + 時間制御 + 評価設定 cfg + 静穏化 qdepth で (score, best_move) を返す。
 pub fn search_with_cfg(
     b0: u64,
     b1: u64,
     max_depth: u8,
     time_limit: Option<f64>,
     cfg: EvalConfig,
+    qdepth: u8,
 ) -> (i64, i32) {
     let mut board = Board::from_bitboards(b0, b1);
     let deadline = time_limit.map(|s| Instant::now() + Duration::from_secs_f64(s));
 
     // 深さ1 は無条件に完走 (最低限の手を保証)。
-    let mut searcher = Searcher::new(None, cfg);
+    let mut searcher = Searcher::new(None, cfg, qdepth);
     let (mut score, mut mv) = searcher.search_root(&mut board, 1).unwrap_or((0, -1));
     if score.abs() > MATE_LO || max_depth <= 1 {
         return (score, mv);
@@ -404,12 +474,13 @@ pub fn analyze_with_cfg(
     max_depth: u8,
     time_limit: Option<f64>,
     cfg: EvalConfig,
+    qdepth: u8,
 ) -> SearchResult {
     let start = Instant::now();
     let mut board = Board::from_bitboards(b0, b1);
     let deadline = time_limit.map(|s| start + Duration::from_secs_f64(s));
 
-    let mut searcher = Searcher::new(None, cfg);
+    let mut searcher = Searcher::new(None, cfg, qdepth);
     let (mut score, mut mv) = searcher.search_root(&mut board, 1).unwrap_or((0, -1));
     let mut completed: u8 = 1;
 
@@ -446,7 +517,7 @@ pub fn analyze_with_cfg(
         best_move: mv,
         completed_depth: completed,
         nodes: searcher.nodes,
-        qnodes: 0,
+        qnodes: searcher.qnodes,
         tt_hits: searcher.tt_hits,
         tt_cutoffs: searcher.tt_cutoffs,
         beta_cutoffs: searcher.beta_cutoffs,
@@ -455,21 +526,37 @@ pub fn analyze_with_cfg(
     }
 }
 
-/// 既定評価での反復深化 + 時間制御。
+/// 既定評価・静穏化なしの反復深化 + 時間制御 (wasm/定石用)。
 pub fn search_position(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> (i64, i32) {
-    search_with_cfg(b0, b1, max_depth, time_limit, EvalConfig::default_config())
+    search_with_cfg(
+        b0,
+        b1,
+        max_depth,
+        time_limit,
+        EvalConfig::default_config(),
+        0,
+    )
 }
 
-/// opening から打ち継ぎ、先手=cfg0 / 後手=cfg1 の評価で固定深さ対局し勝者を返す。
-fn play_game(opening: &[u8], cfg0: EvalConfig, cfg1: EvalConfig, depth: u8) -> Option<u8> {
+/// 対戦相手の仕様: 評価設定と静穏化深さ。
+type Spec = (EvalConfig, u8);
+
+/// opening から打ち継ぎ、先手=spec0 / 後手=spec1 で対局し勝者を返す。
+/// time_ms>0 なら固定時間 (max_depth=64)、0 なら固定 depth。
+fn play_game(opening: &[u8], spec0: Spec, spec1: Spec, depth: u8, time_ms: u32) -> Option<u8> {
     let mut board = Board::new();
     for &c in opening {
         board.play(c as usize).unwrap();
     }
+    let (tl, md) = if time_ms > 0 {
+        (Some(time_ms as f64 / 1000.0), 64u8)
+    } else {
+        (None, depth)
+    };
     while !board.is_terminal() {
-        let cfg = if board.turn == 0 { cfg0 } else { cfg1 };
+        let (cfg, qd) = if board.turn == 0 { spec0 } else { spec1 };
         // 各手で fresh TT 探索 (Python ハーネスと同じ意味論)。
-        let (_, mv) = search_with_cfg(board.bb[0], board.bb[1], depth, None, cfg);
+        let (_, mv) = search_with_cfg(board.bb[0], board.bb[1], md, tl, cfg, qd);
         let col = if mv >= 0 {
             mv as usize
         } else {
@@ -480,23 +567,29 @@ fn play_game(opening: &[u8], cfg0: EvalConfig, cfg1: EvalConfig, depth: u8) -> O
     board.winner
 }
 
-/// 評価 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
+/// 仕様 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
 ///
-/// 各 opening を先後入れ替えて 2 局 (A先手/B後手 と B先手/A後手) 打ち、先手有利を相殺。
+/// 各 opening を先後入れ替えて 2 局打ち、先手有利を相殺。time_ms>0 で固定時間対局。
+#[allow(clippy::too_many_arguments)]
 pub fn play_match(
     cfg_a: EvalConfig,
+    qdepth_a: u8,
     cfg_b: EvalConfig,
+    qdepth_b: u8,
     openings: &[Vec<u8>],
     depth: u8,
+    time_ms: u32,
 ) -> (u32, u32, u32) {
+    let spec_a = (cfg_a, qdepth_a);
+    let spec_b = (cfg_b, qdepth_b);
     let (mut aw, mut bw, mut dr) = (0u32, 0u32, 0u32);
     for opening in openings {
-        match play_game(opening, cfg_a, cfg_b, depth) {
+        match play_game(opening, spec_a, spec_b, depth, time_ms) {
             Some(0) => aw += 1,
             Some(1) => bw += 1,
             _ => dr += 1,
         }
-        match play_game(opening, cfg_b, cfg_a, depth) {
+        match play_game(opening, spec_b, spec_a, depth, time_ms) {
             Some(0) => bw += 1,
             Some(1) => aw += 1,
             _ => dr += 1,
