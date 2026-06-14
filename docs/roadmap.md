@@ -169,8 +169,9 @@ Stage A（線形・関係特徴）→ 有望なら Stage B（柱 N-tuple `[3][31
 で 0.49〜0.54 へ収束＝ノイズと判明（最良 0.542 で 2SE 未達）。よって **EXPERIMENTAL（中立・
 既定オフのまま資産保持）**。固定時間 / Stage A 拡張 / Stage B には進めない（有望特徴のみ進める
 方針）。計測の全経緯は [`eval_measurements.md`](eval_measurements.md) 仮説6 /
-[`benchmarks/geometry_eval.md`](benchmarks/geometry_eval.md)。再挑戦候補は playable のライン交差
-拡張・重み同時最適化（座標探索/SPSA）・勝敗教師の残差学習。
+[`benchmarks/geometry_eval.md`](benchmarks/geometry_eval.md)。再挑戦候補（playable のライン交差
+拡張・柱パターン表・重み同時最適化＝座標探索/SPSA・勝敗教師の残差学習）の詳細メモは
+[`experiments/geometric_relational_eval.md`](experiments/geometric_relational_eval.md) §13。
 
 ---
 
