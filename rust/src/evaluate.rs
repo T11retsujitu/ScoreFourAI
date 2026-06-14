@@ -22,6 +22,11 @@ pub const MODE_REACHABLE: u8 = 2;
 /// 並び: [open1, open2, open3, parity, reach3, center] の先手-後手差。
 pub const NF: usize = 6;
 
+/// 幾何・解放特徴 (Phase 10 実験) の本数。
+/// 並び (手番側視点): [occ_corner, occ_edge, occ_face, occ_interior,
+///                     play_corner, play_edge, play_face, play_interior]。
+pub const GEO_NF: usize = 8;
+
 /// 中央 2x2 柱 (x,y ∈ {1,2} = 柱 5,6,9,10) の全高さセルのマスク。
 /// D4 はこの 4 柱の集合を保つので center 占有数は D4 不変。
 const fn center_mask() -> u64 {
@@ -52,6 +57,10 @@ pub struct EvalConfig {
     pub learned: u8,
     /// 学習線形重み (量子化整数)。learned!=0 のとき features との内積を取る。
     pub lw: [i64; NF],
+    /// 幾何・解放評価モード (Phase 10 実験)。0 = 既定 (geo オフ); !=0 = default + 幾何加点。
+    pub geo_enabled: u8,
+    /// 幾何重み。geo_enabled!=0 のとき geometric_features との内積を default 評価へ加算する。
+    pub geo_weights: [i64; GEO_NF],
 }
 
 impl EvalConfig {
@@ -64,6 +73,8 @@ impl EvalConfig {
             weights: [1, 5, 25],
             learned: 0,
             lw: [0; NF],
+            geo_enabled: 0,
+            geo_weights: [0; GEO_NF],
         }
     }
 
@@ -80,6 +91,15 @@ impl EvalConfig {
     /// なので葉では常に 0 = 地平線内の終端 (勝ち/負け/引分) のみが価値として伝播する。
     pub fn zero_config() -> Self {
         EvalConfig::learned_config([0; NF])
+    }
+
+    /// default_eval + 幾何加点 (Phase 10 実験の候補評価)。geo_weights 全 0 で default に一致。
+    pub fn default_plus_geometric(geo_weights: [i64; GEO_NF]) -> Self {
+        EvalConfig {
+            geo_enabled: 1,
+            geo_weights,
+            ..EvalConfig::default_config()
+        }
     }
 }
 
@@ -226,10 +246,12 @@ pub fn eval_with(board: &Board, cfg: &EvalConfig) -> i64 {
     };
     score += cfg.parity_weight * parity_total;
 
-    if board.turn == 0 {
-        score
+    // 手番側視点へ変換し、有効なら幾何加点 (これも手番側視点) を足す。
+    let base = if board.turn == 0 { score } else { -score };
+    if cfg.geo_enabled != 0 {
+        base + eval_geometric(board, &cfg.geo_weights)
     } else {
-        -score
+        base
     }
 }
 
@@ -293,3 +315,49 @@ const fn build_cell_type() -> [u8; 64] {
 
 /// 64 セルの幾何種類 (Python evaluate.CELL_TYPE と一致)。
 pub const CELL_TYPE: [u8; 64] = build_cell_type();
+
+const fn build_type_masks() -> [u64; 4] {
+    let mut m = [0u64; 4];
+    let mut i = 0;
+    while i < 64 {
+        m[cell_type(i) as usize] |= 1u64 << i;
+        i += 1;
+    }
+    m
+}
+
+/// 種類別セルマスク (Python evaluate.CELL_TYPE_MASKS と一致)。
+pub const CELL_TYPE_MASKS: [u64; 4] = build_type_masks();
+
+/// 手番側視点の幾何・解放特徴 8 次元 (Phase 10 実験)。Python geometric_features と一致。
+///
+/// [0..3] occ_*  = (手番側占有数) - (相手占有数)、種類別。
+/// [4..7] play_* = 手番側が今着手で落とせる着地セルの種類別数 (winner/満杯なら 0)。
+/// すべて整数・D4 不変・盤面非破壊。
+pub fn geometric_features(board: &Board) -> [i64; GEO_NF] {
+    let me = board.turn as usize;
+    let opp = me ^ 1;
+    let mut f = [0i64; GEO_NF];
+    for (t, &mask) in CELL_TYPE_MASKS.iter().enumerate() {
+        f[t] =
+            (board.bb[me] & mask).count_ones() as i64 - (board.bb[opp] & mask).count_ones() as i64;
+    }
+    let mut legal = board.legal_mask();
+    while legal != 0 {
+        let col = legal.trailing_zeros() as usize;
+        let landing = col + board.heights[col] as usize * 16;
+        f[4 + CELL_TYPE[landing] as usize] += 1;
+        legal &= legal - 1;
+    }
+    f
+}
+
+/// 幾何重み w による手番側視点の加点 (整数内積)。Python eval_geometric と一致。
+pub fn eval_geometric(board: &Board, w: &[i64; GEO_NF]) -> i64 {
+    let f = geometric_features(board);
+    let mut s = 0i64;
+    for i in 0..GEO_NF {
+        s += w[i] * f[i];
+    }
+    s
+}

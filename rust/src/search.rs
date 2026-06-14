@@ -432,8 +432,13 @@ impl Searcher {
 
 /// 全幅ウィンドウの negamax 値 (fresh TT, 時間制御なし, 既定評価)。Python negamax の契約用。
 pub fn negamax_value(b0: u64, b1: u64, depth: u8, qdepth: u8) -> i64 {
+    negamax_value_cfg(b0, b1, depth, qdepth, EvalConfig::default_config())
+}
+
+/// 全幅ウィンドウの negamax 値 (fresh TT, 評価設定 cfg 指定)。任意評価の契約テスト用。
+pub fn negamax_value_cfg(b0: u64, b1: u64, depth: u8, qdepth: u8, cfg: EvalConfig) -> i64 {
     let mut board = Board::from_bitboards(b0, b1);
-    let mut searcher = Searcher::new(None, EvalConfig::default_config(), qdepth);
+    let mut searcher = Searcher::new(None, cfg, qdepth);
     searcher.negamax(&mut board, depth, -INF, INF).unwrap_or(0) // 時間制御なしなので必ず Ok
 }
 

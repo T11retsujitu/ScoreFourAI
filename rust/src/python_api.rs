@@ -190,11 +190,116 @@ fn py_play_match_learned(
     ))
 }
 
+/// 局面 (b0,b1) の幾何・解放特徴 8 次元 (手番側視点・Phase 10)。Python geometric_features と一致。
+#[pyfunction]
+#[pyo3(name = "geometric_features")]
+fn py_geometric_features(b0: u64, b1: u64) -> Vec<i64> {
+    evaluate::geometric_features(&Board::from_bitboards(b0, b1)).to_vec()
+}
+
+/// 幾何重み w による手番側視点の加点 (整数内積)。Python eval_geometric と一致。
+#[pyfunction]
+#[pyo3(name = "eval_geometric")]
+fn py_eval_geometric(b0: u64, b1: u64, w: Vec<i64>) -> PyResult<i64> {
+    if w.len() != evaluate::GEO_NF {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "w must have {} weights",
+            evaluate::GEO_NF
+        )));
+    }
+    let mut gw = [0i64; evaluate::GEO_NF];
+    gw.copy_from_slice(&w);
+    Ok(evaluate::eval_geometric(
+        &Board::from_bitboards(b0, b1),
+        &gw,
+    ))
+}
+
+/// 幾何候補 (default + geo 重み) を先手 A、既定 default を B として openings で総当たり対戦し
+/// (a_wins, b_wins, draws) を返す。Phase 10 の採否判定用。time_ms>0 で固定時間対局。
+#[pyfunction]
+#[pyo3(name = "play_match_geometric", signature = (geo_weights, openings, depth, time_ms=0, qdepth=0))]
+fn py_play_match_geometric(
+    geo_weights: Vec<i64>,
+    openings: Vec<Vec<u8>>,
+    depth: u8,
+    time_ms: u32,
+    qdepth: u8,
+) -> PyResult<(u32, u32, u32)> {
+    if geo_weights.len() != evaluate::GEO_NF {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "geo_weights must have {} weights",
+            evaluate::GEO_NF
+        )));
+    }
+    let mut gw = [0i64; evaluate::GEO_NF];
+    gw.copy_from_slice(&geo_weights);
+    Ok(search::play_match(
+        EvalConfig::default_plus_geometric(gw),
+        qdepth,
+        EvalConfig::default_config(),
+        qdepth,
+        &openings,
+        depth,
+        time_ms,
+    ))
+}
+
 /// 全幅ウィンドウの negamax 値 (fresh TT, 静穏化 qdepth)。Python negamax と一致。
 #[pyfunction]
 #[pyo3(name = "negamax_value", signature = (b0, b1, depth, qdepth=0))]
 fn py_negamax_value(b0: u64, b1: u64, depth: u8, qdepth: u8) -> i64 {
     search::negamax_value(b0, b1, depth, qdepth)
+}
+
+/// 候補評価 (default + geo) での全幅 negamax 値 (fresh TT)。Phase 10 の探索契約用。
+#[pyfunction]
+#[pyo3(name = "negamax_value_geometric")]
+fn py_negamax_value_geometric(b0: u64, b1: u64, depth: u8, geo_weights: Vec<i64>) -> PyResult<i64> {
+    if geo_weights.len() != evaluate::GEO_NF {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "geo_weights must have {} weights",
+            evaluate::GEO_NF
+        )));
+    }
+    let mut gw = [0i64; evaluate::GEO_NF];
+    gw.copy_from_slice(&geo_weights);
+    Ok(search::negamax_value_cfg(
+        b0,
+        b1,
+        depth,
+        0,
+        EvalConfig::default_plus_geometric(gw),
+    ))
+}
+
+/// 候補評価 (default + geo) で反復深化探索し (score, best_move) を返す。Phase 10 の探索契約用。
+#[pyfunction]
+#[pyo3(name = "search_geometric", signature = (b0, b1, max_depth, geo_weights, time_limit=None))]
+fn py_search_geometric(
+    b0: u64,
+    b1: u64,
+    max_depth: u8,
+    geo_weights: Vec<i64>,
+    time_limit: Option<f64>,
+) -> PyResult<(i64, i64)> {
+    if geo_weights.len() != evaluate::GEO_NF {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "geo_weights must have {} weights",
+            evaluate::GEO_NF
+        )));
+    }
+    let mut gw = [0i64; evaluate::GEO_NF];
+    gw.copy_from_slice(&geo_weights);
+    let (score, mv) = search::search_with_cfg(
+        b0,
+        b1,
+        max_depth,
+        time_limit,
+        EvalConfig::default_plus_geometric(gw),
+        0,
+    );
+    Ok((score, mv as i64))
 }
 
 /// 反復深化 + 時間制御 + 評価設定 + 静穏化 qdepth で (score, best_move)。
@@ -324,7 +429,12 @@ fn score_four_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_features, m)?)?;
     m.add_function(wrap_pyfunction!(py_eval_learned, m)?)?;
     m.add_function(wrap_pyfunction!(py_play_match_learned, m)?)?;
+    m.add_function(wrap_pyfunction!(py_geometric_features, m)?)?;
+    m.add_function(wrap_pyfunction!(py_eval_geometric, m)?)?;
+    m.add_function(wrap_pyfunction!(py_play_match_geometric, m)?)?;
     m.add_function(wrap_pyfunction!(py_negamax_value, m)?)?;
+    m.add_function(wrap_pyfunction!(py_negamax_value_geometric, m)?)?;
+    m.add_function(wrap_pyfunction!(py_search_geometric, m)?)?;
     m.add_function(wrap_pyfunction!(py_search, m)?)?;
     m.add_function(wrap_pyfunction!(py_best_move, m)?)?;
     m.add_function(wrap_pyfunction!(py_analyze, m)?)?;

@@ -73,6 +73,67 @@ def test_learned_eval_matches_python() -> None:
         assert rs.eval_learned(b.bb[0], b.bb[1], [1, 5, 25, -8, 0, 0]) == default_eval(b)
 
 
+def test_geometric_features_match_python() -> None:
+    """Phase 10: 幾何・解放特徴 8 次元が Rust/Python で完全一致。"""
+    from score_four.evaluate import geometric_features
+
+    for b in _random_nonterminal(31, 120, 34):
+        assert list(rs.geometric_features(b.bb[0], b.bb[1])) == geometric_features(b)
+
+
+def test_eval_geometric_match_python() -> None:
+    """Phase 10: 幾何加点が Rust/Python で一致。重み 0 で 0。"""
+    from score_four.evaluate import eval_geometric
+
+    weights = [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1, 1, 1, 1],
+        [2, -1, 3, -4, 5, -2, 6, -3],
+        [10, 0, 0, -5, 0, 8, 0, 0],
+    ]
+    for b in _random_nonterminal(32, 80, 34):
+        for w in weights:
+            assert rs.eval_geometric(b.bb[0], b.bb[1], w) == eval_geometric(b, w)
+        assert rs.eval_geometric(b.bb[0], b.bb[1], [0] * 8) == 0
+
+
+def test_geometric_search_contract() -> None:
+    """Phase 10: 候補評価 (default+geo) で Rust αβ == Python αβ・全幅==αβ (浅め)。"""
+    from score_four.evaluate import eval_default_plus_geometric
+    from score_four.search import negamax_full
+    from score_four.search import search as py_search
+
+    w = [3, -2, 4, -6, 5, -1, 7, -3]
+
+    def heur(bd):
+        return eval_default_plus_geometric(bd, w)
+
+    # Rust αβ == Python αβ (fresh TT) — 候補評価でも一致。
+    for b in _random_nonterminal(33, 30, 22):
+        for depth in range(1, 6):
+            ab = py_negamax(b.copy(), depth, -INF, INF, {}, heur)
+            rs_val = rs.negamax_value_geometric(b.bb[0], b.bb[1], depth, w)
+            assert rs_val == ab, f"rs!=py depth={depth} rs={rs_val} py={ab}\n{b}"
+    # 全幅 == αβ (候補評価): 全幅は重いので浅い depth(<=3, 16^3 程度) に限定。
+    for b in _random_nonterminal(36, 20, 30):
+        for depth in range(1, 4):
+            full = negamax_full(b.copy(), depth, heur)
+            ab = py_negamax(b.copy(), depth, -INF, INF, {}, heur)
+            assert full == ab, f"全幅!=αβ depth={depth}\n{b}"
+    # 反復深化 search の (score, best_move) も Python/Rust 一致。
+    for b in _random_nonterminal(34, 25, 24):
+        for depth in range(1, 7):
+            ps, pm = py_search(b.copy(), depth, heur)
+            rsc, rsm = rs.search_geometric(b.bb[0], b.bb[1], depth, w)
+            assert (ps, pm) == (rsc, rsm), f"depth={depth} py={(ps, pm)} rs={(rsc, rsm)}\n{b}"
+
+
+def test_geometric_off_keeps_default_eval() -> None:
+    """Phase 10: geo 既定オフのとき eval_default は不変 (zero_config/solve も無影響)。"""
+    for b in _random_nonterminal(35, 60, 32):
+        assert rs.eval_default(b.bb[0], b.bb[1]) == default_eval(b)
+
+
 def test_negamax_value_matches_python() -> None:
     """全幅 negamax 値 (fresh TT) が depth 1..5 で一致する。"""
     for b in _random_nonterminal(3, 30, 22):
