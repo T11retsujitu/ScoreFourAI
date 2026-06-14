@@ -50,7 +50,9 @@ score-four-ai/
 ├── docs/
 │   ├── rules.md             # ゲームのルール
 │   ├── design.md            # 設計メモ（方針の全体像）
-│   └── eval_measurements.md # 評価関数の自己対戦計測ログ
+│   ├── roadmap.md           # 強化ロードマップ（Phase別の状態・計画）
+│   ├── eval_measurements.md # 評価関数の自己対戦計測ログ
+│   └── benchmarks/          # 固定時間ベンチ・Phase別計測
 ├── src/score_four/
 │   ├── board.py         # ビットボード／着手生成／勝利判定／winning_moves
 │   ├── lines.py         # 76 ラインの生成
