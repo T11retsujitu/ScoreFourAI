@@ -314,6 +314,32 @@ def test_both_into_same_file_equals_selective_both(tmp_path: Path) -> None:
     assert both == generate_selective(owner="both", **kw)
 
 
+def test_expansion_collapses_forced_block() -> None:
+    """即詰めの受けが強制な局面は opp_width>1 でも受け1本だけ展開する。"""
+    from score_four.book import _children_to_expand
+    from score_four.search import search
+
+    b = Board()
+    for c in (0, 4, 1, 5, 2):  # 先手0 が a1,b1,c1。次に col3(d1)で勝てる。手番=後手
+        b.play(c)
+    _score, best = search(b, 6)
+    assert best == 3  # 後手は col3 で受けるしかない
+    # opp_width=3 でも、受けない手は即負けなので 1 本に畳まれる。
+    assert _children_to_expand(b, best, width=3, depth=6, time_limit=None) == [3]
+
+
+def test_expansion_keeps_choices_when_not_forced() -> None:
+    """強制でない局面 (選択肢あり) は上位 width 本を残す。"""
+    from score_four.book import _children_to_expand
+    from score_four.search import search
+
+    b = Board()
+    b.play(5)  # 1手だけ。応手に強制はなく負けない手が複数ある。
+    _score, best = search(b, 6)
+    got = _children_to_expand(b, best, width=3, depth=6, time_limit=None)
+    assert len(got) == 3 and best in got  # 選択肢があるので畳まれない
+
+
 def test_committed_book_loads_if_present() -> None:
     """コミット済み data/opening_book.json があれば、空局面に合法な手を返す。"""
     path = Path(__file__).resolve().parents[1] / "data" / "opening_book.json"

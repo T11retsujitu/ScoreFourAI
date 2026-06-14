@@ -98,11 +98,14 @@ def generate_book(
     return book
 
 
-def _rank_children(board: Board, depth: int, time_limit: float | None) -> list[int]:
-    """board の合法手を「手番側にとって良い順」に並べて返す (決定的)。
+def _rank_children(
+    board: Board, depth: int, time_limit: float | None
+) -> list[tuple[int, int]]:
+    """board の合法手を「手番側にとって良い順」に (柱, 値) で並べて返す (決定的)。
 
-    各子局面を depth-1 で探索し、手番側視点 (-子の手番側スコア) で降順ソート。即勝ちは
-    最上位、引分は中庸。選択的生成で「相手手番の上位数手」を選ぶために使う。
+    各子局面を depth-1 で探索し、手番側視点の値 (-子の手番側スコア) で降順ソート。即勝ちは
+    最上位、引分は中庸。値の絶対値が MATE_LO 超なら勝ち/負けを読み切った意味になり、
+    敗北手 (値 <= -MATE_LO) の枝刈りに使う。選択的生成で展開する子を選ぶために使う。
     """
     from .search import WIN
 
@@ -118,24 +121,34 @@ def _rank_children(board: Board, depth: int, time_limit: float | None) -> list[i
             s, _ = _engine_search(child, max(1, depth - 1), time_limit)
             cs = -s  # 親 (手番側) 視点
         scored.append((cs, col))
-    scored.sort(key=lambda x: (-x[0], x[1]))  # スコア降順、同点は柱昇順 (決定的)
-    return [c for _, c in scored]
+    scored.sort(key=lambda x: (-x[0], x[1]))  # 値降順、同点は柱昇順 (決定的)
+    return [(c, cs) for cs, c in scored]
 
 
 def _children_to_expand(
     board: Board, best: int, width: int, depth: int, time_limit: float | None
 ) -> list[int]:
-    """手番側視点で展開する子柱を最大 width 個返す (best は必ず含む)。"""
+    """手番側視点で展開する子柱を返す (best を先頭に必ず含む)。
+
+    **敗北が読み切れた手 (値 <= -MATE_LO) は展開しない** → 真に強制な局面 (即詰めの受け・
+    ダブルリーチ阻止・合法手1つ) は自動的に 1 本に畳まれる。負けない手が複数あれば
+    (受ける／反撃してから受ける等) 上位 width 本を残す。探索駆動なので深いフォークも捕まる。
+    """
+    from .search import MATE_LO
+
     legal = board.legal_moves()
-    if width >= len(legal):
-        return legal  # exhaustive
+    if len(legal) == 1:
+        return legal  # 合法手が1つ = オンリームーブ
     if width <= 1:
-        return [best]  # principal (最善のみ)
-    ranked = _rank_children(board, depth, time_limit)
-    top = ranked[:width]
-    if best not in top:  # 最善を必ず含める (ランキングは depth-1 近似なので保険)
-        top = [best, *ranked[: width - 1]]
-    return top
+        return [best]  # principal (最善のみ)。ランキング不要。
+
+    ranked = _rank_children(board, depth, time_limit)  # [(柱, 値)] 良い順
+    pool = [c for c, v in ranked if v > -MATE_LO]  # 敗北が確定した手は捨てる
+    if best in pool:
+        pool = [best, *(c for c in pool if c != best)]  # best を先頭へ
+    else:
+        pool = [best, *pool]  # 局面自体が負け or 近似差: best (最善の粘り) を必ず含める
+    return pool[:width]
 
 
 def generate_selective(

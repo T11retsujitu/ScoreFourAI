@@ -98,7 +98,10 @@ Web アプリへ載せ、book を正とした自己学習の土台にする（[`
   - **選択的生成** `generate_selective(max_plies, depth, owner, ai_width, opp_width)`: 自分手番は
     上位 `ai_width` 手（既定1=principal）、相手手番は上位 `opp_width` 手（robust）に絞る。
     `owner="both"` は先後両方を生成して merge（Web で両側応手）。plies4 で全列挙3286→選択8 と
-    大幅縮小。`_rank_children` で相手の上位数手を順位付け。
+    大幅縮小。**オンリームーブ対応**: 展開時に**敗北が読み切れた手（値 <= -MATE_LO）を捨てる**ので、
+    即詰めの受け・**ダブルリーチ阻止**・合法手1つ等の強制局面は `opp_width>1` でも 1 本に畳まれ、
+    負けない手が複数（受ける／反撃してから受ける等）あれば上位 width 本を残す（探索駆動で深い
+    フォークも検出）。中終盤で book が締まる。
   - **再開・追加延長できる生成** `generate_book_resumable(out, ...)`: **book ファイル自体が
     チェックポイント**。out を読み、root から再列挙しつつ **depth 以上で探索済みの局面は再利用**、
     未探索だけを探索して周期的に原子保存。これで (a) 中断後の再開、(b) **max_plies を増やしての
