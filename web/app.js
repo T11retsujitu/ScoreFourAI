@@ -160,13 +160,20 @@ function makeLabel(text) {
   sp.scale.set(0.5, 0.5, 0.5); return sp;
 }
 
+let gl3dFailed = false;
 function init3D() {
-  if (!has3D || three) return;
+  if (!has3D || three || gl3dFailed) return;
   const host = $("board3d");
   const scene = new THREE.Scene();
   const W = host.clientWidth || 600, H = host.clientHeight || 400;
   const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 100);
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  } catch (err) {
+    gl3dFailed = true;   // WebGL 非対応環境 → スライス表示にフォールバック
+    return;
+  }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(W, H); host.appendChild(renderer.domElement);
   renderer.domElement.style.touchAction = "none";
@@ -390,13 +397,15 @@ function render() {
 
 /* ====== ビュー切替 ====== */
 function setView(mode) {
-  if (mode === "3d" && !has3D) mode = "slice";
+  if (mode === "3d" && has3D && !gl3dFailed) { init3D(); }   // 失敗したら gl3dFailed が立つ
+  if (mode === "3d" && (!has3D || gl3dFailed)) mode = "slice";
   game.viewMode = mode === "3d" ? "3d" : "slice";
   $("view3d").classList.toggle("active", game.viewMode === "3d");
   $("viewSlice").classList.toggle("active", game.viewMode === "slice");
+  $("view3d").disabled = !has3D || gl3dFailed;
   $("board3d").style.display = game.viewMode === "3d" ? "block" : "none";
   $("slices").style.display = game.viewMode === "slice" ? "flex" : "none";
-  if (game.viewMode === "3d") { init3D(); resize3D(); }
+  if (game.viewMode === "3d") { resize3D(); }
   render();
 }
 
