@@ -65,11 +65,22 @@ impl Board {
             *h = count;
         }
         let moves_played = occ.count_ones() as usize;
+        // 既に 4 が揃っている色があれば勝者を検出する (Python from_bitboards と同義)。
+        // これがないと復元した終局局面で solve/analyze が誤って探索を続けてしまう。
+        let mut winner = None;
+        'scan: for (player, &bb) in [b0, b1].iter().enumerate() {
+            for &m in line_masks() {
+                if bb & m == m {
+                    winner = Some(player as u8);
+                    break 'scan;
+                }
+            }
+        }
         Board {
             bb: [b0, b1],
             heights,
             turn: (moves_played & 1) as u8,
-            winner: None,
+            winner,
             moves_played,
             history: Vec::new(),
         }

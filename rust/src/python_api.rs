@@ -255,6 +255,33 @@ fn py_analyze<'py>(
     Ok(d)
 }
 
+/// 詰み探索 (Phase 7)。局面 (b0,b1) の強制勝ち/負けを零評価反復深化で読み切り、
+/// status / plies / best_move / pv を dict で返す。Python の solve.solve と一致する。
+/// status: "win" / "loss" / "draw" / "unknown" (手番側視点)。
+#[pyfunction]
+#[pyo3(name = "solve", signature = (b0, b1, max_plies=64))]
+fn py_solve<'py>(py: Python<'py>, b0: u64, b1: u64, max_plies: u8) -> PyResult<Bound<'py, PyDict>> {
+    let r = search::solve(b0, b1, max_plies);
+    let status = match r.status {
+        search::MATE_WIN => "win",
+        search::MATE_LOSS => "loss",
+        search::MATE_DRAW => "draw",
+        _ => "unknown",
+    };
+    let d = PyDict::new(py);
+    d.set_item("status", status)?;
+    // plies は win/loss のときだけ意味を持つ (それ以外は None)。
+    if r.status == search::MATE_WIN || r.status == search::MATE_LOSS {
+        d.set_item("plies", r.plies)?;
+    } else {
+        d.set_item("plies", py.None())?;
+    }
+    d.set_item("best_move", r.best_move)?;
+    let pv: Vec<i64> = r.pv.iter().map(|&x| x as i64).collect();
+    d.set_item("pv", pv)?;
+    Ok(d)
+}
+
 /// 評価/静穏化 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
 /// cfg は (parity_weight, immediate, parity_mode, w1, w2, w3)。time_ms>0 で固定時間対局。
 #[pyfunction]
@@ -293,6 +320,7 @@ fn score_four_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_search, m)?)?;
     m.add_function(wrap_pyfunction!(py_best_move, m)?)?;
     m.add_function(wrap_pyfunction!(py_analyze, m)?)?;
+    m.add_function(wrap_pyfunction!(py_solve, m)?)?;
     m.add_function(wrap_pyfunction!(py_play_match, m)?)?;
     m.add_class::<RustBoard>()?;
     Ok(())

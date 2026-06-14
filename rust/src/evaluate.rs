@@ -75,6 +75,12 @@ impl EvalConfig {
             ..EvalConfig::default_config()
         }
     }
+
+    /// 恒等的に 0 を返す D4 不変な評価設定 (Phase 7 詰み探索用)。全重み 0 の学習評価
+    /// なので葉では常に 0 = 地平線内の終端 (勝ち/負け/引分) のみが価値として伝播する。
+    pub fn zero_config() -> Self {
+        EvalConfig::learned_config([0; NF])
+    }
 }
 
 /// D4 不変な整数特徴量 (先手0 視点の先手-後手差) を返す。

@@ -593,6 +593,104 @@ pub fn search_position(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>)
     )
 }
 
+// --- 詰み探索 (mate solver) — Phase 7 の Rust 移植 ------------------------
+// solve.py と同一アルゴリズム: 零評価 (D4 不変) の反復深化 negamax は地平線内の終端
+// だけを価値として伝播するので、最善値 = 最短強制勝ち / 最長粘りの負け になる。
+// Python solve と (status, plies, best_move, pv) を一致させる (言語横断契約テスト)。
+
+/// 詰み探索のステータス。手番側視点。
+pub const MATE_UNKNOWN: u8 = 0;
+pub const MATE_WIN: u8 = 1;
+pub const MATE_LOSS: u8 = 2;
+pub const MATE_DRAW: u8 = 3;
+
+/// 詰み探索の結果 (手番側視点)。plies は win/loss のときのみ >=0、それ以外 -1。
+pub struct MateResult {
+    pub status: u8,
+    pub plies: i32,
+    pub best_move: i32,
+    pub pv: Vec<u8>,
+}
+
+/// 零評価の反復深化探索で (score, best_move) を返す薄いラッパ (solve.py の _solve_value)。
+fn solve_value(b0: u64, b1: u64, max_plies: u8) -> (i64, i32) {
+    search_with_cfg(b0, b1, max_plies, None, EvalConfig::zero_config(), 0)
+}
+
+/// 強制勝ち/負けの主手順を双方最善で復元する (solve.py の _principal_variation)。
+/// 各 ply で零評価探索の最善手を打ち、終端に届くまで辿る。勝ち側は最短、負け側は最長。
+fn solve_pv(b0: u64, b1: u64, max_plies: u8) -> Vec<u8> {
+    let mut line = Vec::new();
+    let mut board = Board::from_bitboards(b0, b1);
+    let mut remaining = max_plies;
+    while !board.is_terminal() && remaining > 0 {
+        let (score, mv) = solve_value(board.bb[0], board.bb[1], remaining);
+        if score.abs() <= MATE_LO {
+            break; // この先は強制決着でない (勝ち手順では起きない)
+        }
+        if mv < 0 || board.heights[mv as usize] >= 4 {
+            break;
+        }
+        board.play(mv as usize).unwrap();
+        line.push(mv as u8);
+        remaining -= 1;
+    }
+    line
+}
+
+/// 局面 (b0,b1) の詰み探索を行い MateResult を返す (手番側視点・決定的)。
+/// solve.py の solve と同義 (零評価反復深化で強制勝ち/負けの最短/最長手数と PV を求める)。
+pub fn solve(b0: u64, b1: u64, max_plies: u8) -> MateResult {
+    let board = Board::from_bitboards(b0, b1);
+    if board.winner.is_some() {
+        // 直前の着手で勝負あり。手番側は受ける手すら無く負け。
+        return MateResult {
+            status: MATE_LOSS,
+            plies: 0,
+            best_move: -1,
+            pv: Vec::new(),
+        };
+    }
+    if board.is_full() {
+        return MateResult {
+            status: MATE_DRAW,
+            plies: -1,
+            best_move: -1,
+            pv: Vec::new(),
+        };
+    }
+    let num_moves = board.num_moves() as i64;
+    let (score, mv) = solve_value(b0, b1, max_plies);
+    if score > MATE_LO {
+        return MateResult {
+            status: MATE_WIN,
+            plies: ((WIN - score) - num_moves) as i32,
+            best_move: mv,
+            pv: solve_pv(b0, b1, max_plies),
+        };
+    }
+    if score < -MATE_LO {
+        return MateResult {
+            status: MATE_LOSS,
+            plies: ((WIN + score) - num_moves) as i32,
+            best_move: mv,
+            pv: solve_pv(b0, b1, max_plies),
+        };
+    }
+    // 決着なし。地平線が残り全マスを覆っていれば引分確定、そうでなければ未確定。
+    let status = if max_plies as i64 >= 64 - num_moves {
+        MATE_DRAW
+    } else {
+        MATE_UNKNOWN
+    };
+    MateResult {
+        status,
+        plies: -1,
+        best_move: mv,
+        pv: Vec::new(),
+    }
+}
+
 /// 対戦相手の仕様: 評価設定と静穏化深さ。
 type Spec = (EvalConfig, u8);
 
