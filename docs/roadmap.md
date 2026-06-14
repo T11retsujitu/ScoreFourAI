@@ -120,7 +120,7 @@ Web アプリへ載せ、book を正とした自己学習の土台にする（[`
 - ⏳ 予定: **Web アプリへの book ロード**（コンパクト web book の書き出し＋JS の D4 照会 or
   `sf_book_lookup`）、**book を正とした自己学習**（局面→最善手を policy 的に学ぶ。Phase 8 の
   教訓に従い score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）は
-  必要になってから。
+  必要になってから。**設計メモ（未実装・アイデア）**: [`book_web_and_learning.md`](book_web_and_learning.md)。
 
 ## Phase 7 — 詰み探索・問題生成 ◑
 
@@ -223,3 +223,5 @@ Rust 化）、Phase 9 残り。いずれも「変更前にベンチ保存→1変
 - [`benchmarks/`](benchmarks/) — 固定時間ベンチと Phase 別計測
 - [`experiments/geometric_relational_eval.md`](experiments/geometric_relational_eval.md) —
   Phase 10 幾何・解放関係評価の実験計画（ユーザー仮説）
+- [`book_web_and_learning.md`](book_web_and_learning.md) — 定石の Web ロード / 自己学習の設計メモ（未実装）
+- [`opening_book_windows.md`](opening_book_windows.md) — Windows(CPU) 定石生成ガイド
