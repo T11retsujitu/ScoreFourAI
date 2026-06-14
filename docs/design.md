@@ -153,6 +153,12 @@ note の qweral 氏は、立体四目並べを段階的に攻略している。
   Python と同値を言語横断契約テストで保証、探索は約 50〜60 倍）。
 - **定石生成**：実装済み（5 章の 3 / 4 章の根からの深い反復深化と PV・評価値の保存、
   `book.py` / `data/opening_book.json`）。**Web 対局アプリ**（WASM 化）も実装。
+- **詰み探索（Phase 7）**：通常の評価ベース αβ とは別の解析モードとして、零評価（D4 不変）の
+  反復深化で強制勝ち/負けの最短手数・PV を読み切る（`solve.py`）。詰み問題の自動生成
+  （`problems.py`）も実装。**Rust 移植（`search::solve`）＋ WASM 公開（`sf_solve`）＋ Web の
+  「詰み探索」UI** まで通し、Python/Rust 同値を契約テスト・node で確認。別アルゴリズムの
+  **df-PN**（`dfpn.py`）も実装・計測したが、詰み証明は高速な一方で詰みなし反証で劣り最短手数/PV
+  を返さないためドロップイン置換にせず資産として保持（[`benchmarks/dfpn.md`](benchmarks/dfpn.md)）。
 - **強化**（[`docs/roadmap.md`](roadmap.md)）：計測基盤（`analyze`／固定時間ベンチ）、着手順序強化
   （killer/history でノード −37〜50%）、u16 move mask（NPS +12〜15%）を採用。Threat Quiescence・
   Aspiration Window は計測で中立/悪化につき不採用（資産として保持）。
