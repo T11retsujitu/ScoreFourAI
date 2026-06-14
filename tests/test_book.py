@@ -7,15 +7,19 @@
 import random
 from pathlib import Path
 
+import json
+
 from score_four.board import Board
 from score_four.book import (
+    book_entry,
     book_move,
     choose_move,
     generate_book,
     load_book,
+    merge_book,
     save_book,
 )
-from score_four.symmetry import COL_PERMS
+from score_four.symmetry import COL_PERMS, canonical
 
 # 小さく速い book (固定深さ)。Python/Rust いずれでも同一結果。
 _TINY = dict(max_plies=2, depth=6)
@@ -118,6 +122,51 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "book.json"
     save_book(book, path)
     assert load_book(path) == book
+
+
+def test_entries_carry_depth_and_book_entry(tmp_path: Path) -> None:
+    """v2: エントリは (move, score, depth, ply)。book_entry が depth/ply を返す。"""
+    book = generate_book(max_plies=2, depth=6)
+    b = Board()
+    b.play(5)
+    move, score, depth, ply = book_entry(book, b)
+    assert depth == 6 and ply == 1
+    assert (move, score) == book_move(book, b)
+    # 保存→読込でも 4 要素・depth 保持。
+    save_book(book, tmp_path / "b.json")
+    assert load_book(tmp_path / "b.json") == book
+
+
+def test_loads_legacy_v1_format(tmp_path: Path) -> None:
+    """旧 v1 形式 (move, score, ply) を読み込み、depth=0 に正規化する。"""
+    key = canonical(0, 0)[0]
+    v1 = {"format": "score-four-opening-book/1", "entries": {str(key): [5, 0, 0]}}
+    path = tmp_path / "v1.json"
+    path.write_text(json.dumps(v1), encoding="utf-8")
+    book = load_book(path)
+    assert book[key] == (5, 0, 0, 0)  # depth が 0 (不明) で補われる
+    assert book_move(book, Board()) is not None
+
+
+def test_merge_prefers_deeper(tmp_path: Path) -> None:
+    """merge_book は同一キーで深い depth を優先 (品質単調)。"""
+    key = canonical(0, 0)[0]
+    shallow = {key: (5, 10, 6, 0)}
+    deep = {key: (6, 20, 12, 0)}
+    assert merge_book(shallow, deep)[key] == (6, 20, 12, 0)  # 深い方を採用
+    assert merge_book(deep, shallow)[key] == (6, 20, 12, 0)  # 浅い方は既存を上書きしない
+    # 別キーは単純に統合。
+    other = {key ^ 1: (3, 0, 8, 1)}
+    merged = merge_book(shallow, other)
+    assert len(merged) == 2
+
+
+def test_atomic_save_no_leftover_tmp(tmp_path: Path) -> None:
+    """save_book は一時ファイルを残さない (原子的差し替え)。"""
+    book = generate_book(max_plies=1, depth=6)
+    save_book(book, tmp_path / "b.json")
+    assert not any(p.suffix == ".tmp" for p in tmp_path.iterdir())
+    assert load_book(tmp_path / "b.json") == book
 
 
 def test_committed_book_loads_if_present() -> None:
