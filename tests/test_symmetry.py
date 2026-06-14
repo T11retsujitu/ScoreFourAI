@@ -131,13 +131,21 @@ def test_all_evaluations_are_symmetry_invariant() -> None:
     探索が D4 正規化キーで TT を共有するための必須契約。即時脅威・パリティは
     高さ z に依存するが z は D4 で不変なので保たれる。
     """
-    from score_four.evaluate import default_eval, parity_eval, threat_eval
+    from score_four.evaluate import (
+        default_eval,
+        features,
+        learned_eval,
+        parity_eval,
+        threat_eval,
+    )
 
     evals = [
         line_potential,
         threat_eval,
         default_eval,  # 既定の探索評価 (パリティ付き)
         lambda b: parity_eval(b, parity_weight=7),  # 非ゼロ重みでも不変
+        lambda b: tuple(features(b)),  # 全特徴量が D4 不変 (Phase 8 学習評価の前提)
+        lambda b: learned_eval(b, [3, -2, 7, -8, 4, 1]),  # 学習評価 (任意重み) も D4 不変
     ]
     rng = random.Random(20)
     for _ in range(60):

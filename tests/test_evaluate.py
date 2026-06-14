@@ -115,3 +115,37 @@ def test_default_eval_is_tuned_parity() -> None:
         if board.is_terminal():
             continue
         assert default_eval(board) == parity_eval(board, parity_weight=_PARITY, immediate=0)
+
+
+def test_features_are_pure_and_sized() -> None:
+    """Phase 8: features は純粋・長さ NF・整数のみ (決定論の前提)。"""
+    from score_four.evaluate import NF, features
+
+    board = _play([5, 6, 9, 10, 5])
+    snap = (board.bb[0], board.bb[1])
+    f = features(board)
+    assert len(f) == NF
+    assert all(isinstance(x, int) for x in f)
+    assert (board.bb[0], board.bb[1]) == snap  # 非破壊
+    assert features(Board()) == [0] * NF  # 空盤は中立
+
+
+def test_learned_eval_reproduces_default() -> None:
+    """Phase 8: 学習重み [1,5,25,-8,0,0] は手書きパリティ評価 default_eval と完全一致。
+
+    パリティ式が特徴量の線形分解で表せること (= 学習評価が既定の上位互換) の健全性。
+    """
+    import random
+
+    from score_four.evaluate import learned_eval
+
+    rng = random.Random(7)
+    for _ in range(60):
+        board = Board()
+        for _ in range(rng.randint(1, 32)):
+            if board.is_terminal():
+                break
+            board.play(rng.choice(board.legal_moves()))
+        if board.is_terminal():
+            continue
+        assert learned_eval(board, [1, 5, 25, -8, 0, 0]) == default_eval(board)

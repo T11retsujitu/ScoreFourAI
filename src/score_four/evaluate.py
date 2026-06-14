@@ -151,3 +151,67 @@ def default_eval(board: Board) -> int:
     D4 不変なので探索の対称性圧縮 TT と矛盾しない。
     """
     return parity_eval(board)
+
+
+# 学習評価 (Phase 8) の D4 不変・整数特徴量の本数と並び。Rust の NF / features と一致。
+NF = 6
+
+# 中央 2x2 柱 (x,y ∈ {1,2} = 柱 5,6,9,10) の全高さセルのマスク。D4 はこの柱集合を保つ。
+_CENTER_MASK = 0
+for _z in range(4):
+    for _col in (5, 6, 9, 10):
+        _CENTER_MASK |= 1 << (_z * 16 + _col)
+
+
+def features(board: Board) -> list[int]:
+    """D4 不変な整数特徴量 (先手0 視点の先手-後手差) を返す。Rust features と一致。
+
+    すべて整数・1 回のライン走査 + center popcount で計算するため決定的。z(高さ)は
+    D4 で不変、柱集合 {5,6,9,10} は D4 で保たれるので全特徴量が D4 対称不変。並びは:
+        0 open1  : 占有1のライン数
+        1 open2  : 占有2のライン数
+        2 open3  : 占有3 (未完成3並び) のライン数
+        3 parity : open3 の完成セル z が奇数=+1/偶数=-1 の総和 (既存パリティ項)
+        4 reach3 : open3 のうち完成セルが今すぐ着手可能なライン数
+        5 center : 中央 2x2 柱の占有駒数
+    純粋関数。学習評価 (Phase 8) の教師データ生成・契約テスト用。
+    """
+    p0, p1 = board.bb
+    heights = board.heights
+    f = [0] * NF
+    for mask in LINE_MASKS:
+        a = p0 & mask
+        b = p1 & mask
+        if a:
+            if b:
+                continue  # 両者混在 = 死んだライン
+            occ, sign = a, 1
+        elif b:
+            occ, sign = b, -1
+        else:
+            continue
+        c = occ.bit_count()
+        if c == 1:
+            f[0] += sign
+        elif c == 2:
+            f[1] += sign
+        elif c == 3:
+            f[2] += sign
+            e = (mask ^ occ).bit_length() - 1  # 残り1マスのセル index
+            z = e >> 4
+            f[3] += sign * (1 if z & 1 else -1)
+            if z == heights[e & 15]:
+                f[4] += sign
+    f[5] = (p0 & _CENTER_MASK).bit_count() - (p1 & _CENTER_MASK).bit_count()
+    return f
+
+
+def learned_eval(board: Board, weights: list[int]) -> int:
+    """学習線形重み weights による手番側視点の評価 (整数内積)。Rust eval_learned と一致。
+
+    weights は features と同じ並び・長さ NF。整数のみで計算するため決定的・D4 不変。
+    weights=[1, 5, 25, -8, 0, 0] のとき default_eval と完全一致する (健全性チェック)。
+    """
+    f = features(board)
+    score = sum(w * x for w, x in zip(weights, f, strict=True))
+    return score if board.turn == 0 else -score

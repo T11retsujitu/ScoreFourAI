@@ -108,6 +108,7 @@ fn cfg_from_tuple(c: (i64, i64, u8, i64, i64, i64)) -> EvalConfig {
         immediate: c.1,
         parity_mode: c.2,
         weights: [c.3, c.4, c.5],
+        ..EvalConfig::default_config()
     }
 }
 
@@ -127,6 +128,59 @@ fn py_eval_cfg(
 ) -> i64 {
     let cfg = cfg_from_tuple((parity_weight, immediate, parity_mode, w1, w2, w3));
     evaluate::eval_with(&Board::from_bitboards(b0, b1), &cfg)
+}
+
+/// 局面 (b0,b1) の D4 不変な整数特徴量 [open1,open2,open3,parity,reach3,center] (先手-後手差)。
+/// 学習評価 (Phase 8) の教師データ生成・契約テスト用。Python の FEATURES と一致。
+#[pyfunction]
+#[pyo3(name = "features")]
+fn py_features(b0: u64, b1: u64) -> Vec<i64> {
+    evaluate::features(&Board::from_bitboards(b0, b1)).to_vec()
+}
+
+/// 学習線形重み lw による手番側視点の評価値 (整数内積)。Python の learned_eval と一致。
+#[pyfunction]
+#[pyo3(name = "eval_learned")]
+fn py_eval_learned(b0: u64, b1: u64, lw: Vec<i64>) -> PyResult<i64> {
+    if lw.len() != evaluate::NF {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "lw must have {} weights",
+            evaluate::NF
+        )));
+    }
+    let mut w = [0i64; evaluate::NF];
+    w.copy_from_slice(&lw);
+    Ok(evaluate::eval_learned(&Board::from_bitboards(b0, b1), &w))
+}
+
+/// 学習評価 (重み lw) を先手 A、既定パリティ評価を B として openings で総当たり対戦させ
+/// (a_wins, b_wins, draws) を返す。Phase 8 の採否判定用。time_ms>0 で固定時間対局。
+#[pyfunction]
+#[pyo3(name = "play_match_learned", signature = (lw, openings, depth, time_ms=0, qdepth=0))]
+fn py_play_match_learned(
+    lw: Vec<i64>,
+    openings: Vec<Vec<u8>>,
+    depth: u8,
+    time_ms: u32,
+    qdepth: u8,
+) -> PyResult<(u32, u32, u32)> {
+    if lw.len() != evaluate::NF {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "lw must have {} weights",
+            evaluate::NF
+        )));
+    }
+    let mut w = [0i64; evaluate::NF];
+    w.copy_from_slice(&lw);
+    Ok(search::play_match(
+        EvalConfig::learned_config(w),
+        qdepth,
+        EvalConfig::default_config(),
+        qdepth,
+        &openings,
+        depth,
+        time_ms,
+    ))
 }
 
 /// 全幅ウィンドウの negamax 値 (fresh TT, 静穏化 qdepth)。Python negamax と一致。
@@ -232,6 +286,9 @@ fn score_four_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_canonical, m)?)?;
     m.add_function(wrap_pyfunction!(py_eval_default, m)?)?;
     m.add_function(wrap_pyfunction!(py_eval_cfg, m)?)?;
+    m.add_function(wrap_pyfunction!(py_features, m)?)?;
+    m.add_function(wrap_pyfunction!(py_eval_learned, m)?)?;
+    m.add_function(wrap_pyfunction!(py_play_match_learned, m)?)?;
     m.add_function(wrap_pyfunction!(py_negamax_value, m)?)?;
     m.add_function(wrap_pyfunction!(py_search, m)?)?;
     m.add_function(wrap_pyfunction!(py_best_move, m)?)?;

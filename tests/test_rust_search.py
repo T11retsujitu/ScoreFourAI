@@ -47,6 +47,32 @@ def test_eval_default_matches_python() -> None:
         assert rs.eval_default(b.bb[0], b.bb[1]) == default_eval(b)
 
 
+def test_features_match_python() -> None:
+    """Phase 8: D4 不変整数特徴量が Rust/Python で完全一致 (教師データ生成の前提)。"""
+    from score_four.evaluate import features
+
+    for b in _random_nonterminal(21, 120, 34):
+        assert list(rs.features(b.bb[0], b.bb[1])) == features(b)
+
+
+def test_learned_eval_matches_python() -> None:
+    """Phase 8: 学習線形評価が Rust/Python で一致し、既定重みは default_eval に一致する。"""
+    from score_four.evaluate import learned_eval
+
+    weights = [
+        [1, 5, 25, -8, 0, 0],  # default_eval と等価な健全性ケース
+        [3, -2, 7, -8, 4, 1],
+        [0, 0, 0, 0, 0, 0],
+        [10, -10, 100, 16, -4, 2],
+    ]
+    for b in _random_nonterminal(22, 100, 34):
+        for w in weights:
+            ru = rs.eval_learned(b.bb[0], b.bb[1], w)
+            assert ru == learned_eval(b, w)
+        # 既定重みは default_eval と完全一致 (パリティ式の線形分解の健全性)。
+        assert rs.eval_learned(b.bb[0], b.bb[1], [1, 5, 25, -8, 0, 0]) == default_eval(b)
+
+
 def test_negamax_value_matches_python() -> None:
     """全幅 negamax 値 (fresh TT) が depth 1..5 で一致する。"""
     for b in _random_nonterminal(3, 30, 22):
