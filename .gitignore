@@ -10,9 +10,11 @@ venv/
 .ruff_cache/
 
 # Engine artifacts
-*.book        # 生成した定石
+*.book        # 生成した定石 (アドホック)
 *.tt          # 置換表ダンプ
-data/
+# data/ は基本無視するが、コミット済みの定石だけ追跡する
+data/*
+!data/opening_book.json
 logs/
 
 # OS / editor
