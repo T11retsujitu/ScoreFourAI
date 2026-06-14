@@ -26,17 +26,19 @@
 3. 脅威ベースの強制手枝刈り ← 実戦的強さを最も伸ばす
 4. 着手順序（TT手 → 勝ち手 → 中央 → killer/history）
 5. 対称性圧縮（D4・8 重）
-6. 反復深化 ＋ PVS
+6. 反復深化 ＋ PVS（＋時間制御）
 7. 評価関数（脅威カウント ＋ 奇偶パリティ）※下記の「※」参照
 
-> ※ 奇偶（パリティ）の扱いは **確立した理論ではなく、本プロジェクトの仮説・方針**。Connect Four の奇/偶脅威理論は 2D・7 列・先手が奇数段という構造に依存しており、16 柱・3 次元の Score Four へそのまま移植できる保証はない。立体版として**要適応・要検証**のヒューリスティックと位置づける（詳細は [`docs/design.md`](docs/design.md)）。
+> ※ 奇偶（パリティ）は **確立した理論ではなく経験的ヒューリスティック**。Connect Four の奇/偶脅威理論は 2D・7 列・先手が奇数段という構造に依存し、Score Four へそのまま移植できる保証はない。本プロジェクトでは**自己対戦で計測**し、多シード集計で頑健に勝ち越す設定（mode=ALL, weight=-8）を `default_eval` として採用した（depth4 集計 winrate ≈ 0.59）。精緻化案（最下段のみ／即着手可能のみ）はトーナメントで棄却。計測の全経緯は [`docs/eval_measurements.md`](docs/eval_measurements.md)。
 
-## ビルド順（依存）
+## ビルド順（依存）と進捗
 
-1. **コア**：ビットボード＋着手生成＋勝利判定 → 総当たり参照実装でテストし、証明可能なレベルまで固める
-2. **α-β エンジン**：置換表＋対称性圧縮 →（この時点で対戦・解析 AI が成立）
-3. **定石**：根から深く読ませ最善手順（PV）を保存 → 自動生成
-4. （任意）AlphaZero
+1. ✅ **コア**：ビットボード＋着手生成＋勝利判定 → 総当たり参照実装でテスト
+2. ✅ **α-β エンジン**：置換表＋脅威枝刈り＋対称性圧縮＋反復深化＋PVS（対戦・解析 AI 成立）
+3. ✅ **評価**：自己対戦で計測しパリティ採用
+4. ✅ **Rust 高速化**（任意）：コア＋探索を移植、Python と同値を契約テストで保証（約50〜60倍）
+5. ⏳ **定石**：根から深く読ませ最善手順（PV）を保存 → 自動生成（次の一歩）
+6. （任意）AlphaZero（α-β が頭打ちになった後 or 学習目的のときのみ）
 
 ## プロジェクト構成
 
@@ -50,30 +52,54 @@ score-four-ai/
 │   ├── design.md            # 設計メモ（方針の全体像）
 │   └── eval_measurements.md # 評価関数の自己対戦計測ログ
 ├── src/score_four/
-│   ├── board.py         # ビットボード／着手生成／勝利判定
+│   ├── board.py         # ビットボード／着手生成／勝利判定／winning_moves
 │   ├── lines.py         # 76 ラインの生成
 │   ├── symmetry.py      # D4 対称性（8 重）正規化
-│   ├── evaluate.py      # 評価関数（検証済みパリティ）
+│   ├── evaluate.py      # 評価関数（line_potential / threat_eval / parity_eval / default_eval）
 │   ├── search.py        # α-β＋TT＋脅威枝刈り＋対称性＋反復深化＋PVS＋時間制御
 │   └── selfplay.py      # 自己対戦の計測ハーネス
-├── rust/                # コアの Rust 移植（PyO3 拡張 score_four_rs）
-│   ├── Cargo.toml
-│   ├── pyproject.toml   # maturin ビルド設定
-│   └── src/{lib,board,lines}.rs
-└── tests/               # 参照実装・契約テスト（言語横断含む）
+├── rust/                # 高速版（PyO3 拡張 score_four_rs）
+│   ├── Cargo.toml / pyproject.toml   # maturin ビルド設定
+│   └── src/{lib,board,lines,symmetry,evaluate,search}.rs
+└── tests/               # 参照実装・契約テスト（言語横断・D4不変性含む）
 ```
 
-### Rust コア（任意・速度用）
+### Rust 高速版（任意・速度用）
 
-速度が律速になるホットループを Rust へ移植中（設計 §6・段階1=コア先行）。
-拡張がなくても純 Python のスイートは独立に動く（Rust 契約テストは skip）。
+ホットループ（コア＋探索＋評価）を Rust へ移植済み（設計 §6）。Python と**同一アルゴリズム**で、
+言語横断契約テストにより結果一致を保証する。**拡張が無くても純 Python のスイートは独立に緑**
+（Rust 契約テストは `importorskip` で skip）。
 
 ```sh
 cd rust
 maturin build --release
 pip install --force-reinstall --no-deps target/wheels/score_four_rs-*.whl
-# 以後 `import score_four_rs` が使え、tests/test_rust_core.py が
-# Python 参照との全局面一致を検証する。
+# 以後 `import score_four_rs` が使え、tests/test_rust_*.py が Python 参照との一致を検証する。
+```
+
+## 使い方
+
+```sh
+# テスト（src レイアウト）
+PYTHONPATH=src pytest -q
+
+# Python から探索（手番側視点の (score, best_move) を返す）
+PYTHONPATH=src python -c "
+from score_four.board import Board
+from score_four.search import search
+b = Board()
+for c in [5, 6, 9, 10]: b.play(c)
+print(search(b, max_depth=8))            # 反復深化。time_limit=秒 も指定可
+"
+
+# 高速版（Rust）。bb=(先手, 後手) のビットボードを渡す
+PYTHONPATH=src python -c "
+import score_four_rs as rs
+from score_four.board import Board
+b = Board()
+for c in [5, 6, 9, 10]: b.play(c)
+print(rs.search(b.bb[0], b.bb[1], 10))   # Python 探索と同値・約50〜60倍速
+"
 ```
 
 ## 開発の前提（非交渉）
@@ -84,9 +110,9 @@ pip install --force-reinstall --no-deps target/wheels/score_four_rs-*.whl
 ## ステータス
 
 検証済みコア（lines/board）＋ 探索一式（α-β・TT・脅威枝刈り・D4対称性・反復深化＋PVS・
-時間制御）＋ 計測駆動の評価（パリティ採用）まで実装済み。Rust 移植は段階1（コア）＋
-段階2（symmetry/evaluate/search）完了し、Python 探索と同値を言語横断契約テストで保証
-（探索は Python 比 約50〜60倍）。次は定石生成。
+時間制御）＋ 計測駆動の評価（多シード自己対戦・トーナメントでパリティ ALL/-8 を採用）まで
+実装済み。Rust 移植はコア＋探索＋評価を完了し、Python 探索と同値を言語横断契約テストで保証
+（探索は Python 比 約50〜60倍、評価のパラメータ化と高速トーナメントも実装）。**次は定石生成。**
 
 ## 参考
 
