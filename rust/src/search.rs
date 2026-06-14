@@ -47,6 +47,14 @@ const EXACT: u8 = 0;
 const LOWER: u8 = 1;
 const UPPER: u8 = 2;
 
+// 着手順序スコアの定数 (Python と完全一致)。
+const ORD_TT: i64 = 4_000_000_000;
+const ORD_K0: i64 = 3_000_000_000;
+const ORD_K1: i64 = 2_900_000_000;
+const ORD_HIST_MULT: i64 = 16;
+const HISTORY_CAP: i64 = 1 << 20;
+const MAX_PLY: usize = 66; // killers のインデックス上限 (depth <= 64)
+
 /// 着手順序: 中央寄りの柱を先に。centrality = |2x-3| + |2y-3| (Python の整数化)。
 fn centrality(c: usize) -> i32 {
     let x = (c % 4) as i32;
@@ -78,20 +86,6 @@ fn terminal_value(board: &Board) -> Option<i64> {
     None
 }
 
-/// 着手順: 置換表の手を先頭、残りは中央寄り順。
-fn ordered_moves(board: &Board, tt_move: i32) -> Vec<u8> {
-    let rank = column_rank();
-    let mut moves = board.legal_moves();
-    moves.sort_by_key(|&c| rank[c as usize]);
-    if tt_move >= 0 {
-        if let Some(pos) = moves.iter().position(|&c| c as i32 == tt_move) {
-            let c = moves.remove(pos);
-            moves.insert(0, c);
-        }
-    }
-    moves
-}
-
 /// 締切超過の標識。
 struct Timeout;
 
@@ -108,6 +102,8 @@ struct Searcher {
     beta_cutoffs: u64,
     cfg: EvalConfig,
     qdepth: u8,
+    killers: Vec<[i32; 2]>,  // killers[depth] = [k0, k1] (柱 or -1)
+    history: [[i64; 16]; 2], // history[player][col]
 }
 
 impl Searcher {
@@ -122,6 +118,50 @@ impl Searcher {
             beta_cutoffs: 0,
             cfg,
             qdepth,
+            killers: vec![[-1, -1]; MAX_PLY],
+            history: [[0; 16]; 2],
+        }
+    }
+
+    /// killer/history を使った着手順序 (Python _ordered_moves と同一スコア)。
+    /// history が空の初回は中央寄り順に一致する。
+    fn ordered_moves_ki(&self, board: &Board, tt_move: i32, depth: u8) -> Vec<u8> {
+        let kd = self.killers[depth as usize];
+        let hp = &self.history[board.turn as usize];
+        let rank = column_rank();
+        let score = |c: u8| -> i64 {
+            let ci = c as i32;
+            if ci == tt_move {
+                return ORD_TT;
+            }
+            if ci == kd[0] {
+                return ORD_K0;
+            }
+            if ci == kd[1] {
+                return ORD_K1;
+            }
+            hp[c as usize] * ORD_HIST_MULT + (15 - rank[c as usize] as i64)
+        };
+        let mut moves = board.legal_moves();
+        moves.sort_by_key(|&c| (-score(c), c)); // -score 昇順 = score 降順, 同点は柱昇順
+        moves
+    }
+
+    /// beta cutoff を起こした手 col で killer/history を更新する。
+    fn update_cutoff(&mut self, depth: u8, player: usize, col: u8) {
+        let kd = &mut self.killers[depth as usize];
+        if col as i32 != kd[0] {
+            kd[1] = kd[0];
+            kd[0] = col as i32;
+        }
+        let c = col as usize;
+        self.history[player][c] += (depth as i64) * (depth as i64);
+        if self.history[player][c] > HISTORY_CAP {
+            for p in 0..2 {
+                for cc in 0..16 {
+                    self.history[p][cc] >>= 1;
+                }
+            }
         }
     }
 
@@ -257,9 +297,10 @@ impl Searcher {
             }
         }
 
+        let is_forced = forced.is_some();
         let moves: Vec<u8> = match forced {
             Some(c) => vec![c],
-            None => ordered_moves(board, tt_move),
+            None => self.ordered_moves_ki(board, tt_move, depth),
         };
 
         let mut best = -INF;
@@ -295,6 +336,9 @@ impl Searcher {
             }
             if alpha >= beta {
                 self.beta_cutoffs += 1;
+                if !is_forced {
+                    self.update_cutoff(depth, me, col);
+                }
                 break; // beta カット
             }
             first = false;
@@ -336,7 +380,7 @@ impl Searcher {
         }
 
         let mut first = true;
-        for col in ordered_moves(board, tt_move) {
+        for col in self.ordered_moves_ki(board, tt_move, depth) {
             board.play(col as usize).unwrap();
             let result: Result<i64, Timeout> = if first {
                 self.negamax(board, depth - 1, -INF, -alpha).map(|s| -s)

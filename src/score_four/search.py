@@ -75,6 +75,40 @@ COLUMN_RANK: tuple[int, ...] = tuple(
     COLUMN_ORDER.index(col) for col in range(16)
 )
 
+# 着手順序スコアの定数 (Python・Rust で完全一致させる)。
+_ORD_TT = 4_000_000_000      # TT手は最優先
+_ORD_K0 = 3_000_000_000      # killer 1
+_ORD_K1 = 2_900_000_000      # killer 2
+_ORD_HIST_MULT = 16          # history を中央寄りより支配的に
+_HISTORY_CAP = 1 << 20       # history がこれを超えたら全体を半減
+
+# killer / history を使う着手順序の状態。
+# killers[depth] = [k0, k1] (柱 or -1)、history[player][col]。
+Killers = list[list[int]]
+History = list[list[int]]
+
+
+def _new_ordering_state(max_depth: int) -> tuple[Killers, History]:
+    killers: Killers = [[-1, -1] for _ in range(max_depth + 2)]
+    history: History = [[0] * 16, [0] * 16]
+    return killers, history
+
+
+def _update_cutoff(
+    killers_d: list[int], history: History, player: int, col: int, depth: int
+) -> None:
+    """beta cutoff を起こした手 col で killer / history を更新する。"""
+    if col != killers_d[0]:
+        killers_d[1] = killers_d[0]
+        killers_d[0] = col
+    hp = history[player]
+    hp[col] += depth * depth
+    if hp[col] > _HISTORY_CAP:
+        for p in (0, 1):
+            row = history[p]
+            for c in range(16):
+                row[c] >>= 1
+
 
 def terminal_value(board: Board) -> int | None:
     """局面が終端なら手番側から見たスコア、そうでなければ None。
@@ -91,13 +125,38 @@ def terminal_value(board: Board) -> int | None:
     return None
 
 
-def _ordered_moves(board: Board, tt_move: int) -> list[int]:
-    """着手を試す順に並べる。置換表の手を先頭、残りは中央寄り順。"""
+def _ordered_moves(
+    board: Board,
+    tt_move: int,
+    killers_d: list[int] | None = None,
+    history_p: list[int] | None = None,
+) -> list[int]:
+    """着手を試す順に並べる。
+
+    killers_d/history_p が None なら従来 (TT手 先頭 + 中央寄り)。与えられれば
+    TT手 → killer → history → 中央寄り の優先順位でスコア付けして並べる。history が
+    空のときは中央寄り順に一致するので、初回反復は従来と同じ順序になる。
+    """
     moves = board.legal_moves()
-    moves.sort(key=COLUMN_RANK.__getitem__)
-    if tt_move >= 0 and tt_move in moves:
-        moves.remove(tt_move)
-        moves.insert(0, tt_move)
+    if killers_d is None:
+        moves.sort(key=COLUMN_RANK.__getitem__)
+        if tt_move >= 0 and tt_move in moves:
+            moves.remove(tt_move)
+            moves.insert(0, tt_move)
+        return moves
+
+    k0, k1 = killers_d[0], killers_d[1]
+
+    def score(c: int) -> int:
+        if c == tt_move:
+            return _ORD_TT
+        if c == k0:
+            return _ORD_K0
+        if c == k1:
+            return _ORD_K1
+        return history_p[c] * _ORD_HIST_MULT + (15 - COLUMN_RANK[c])
+
+    moves.sort(key=lambda c: (-score(c), c))
     return moves
 
 
@@ -202,6 +261,8 @@ def negamax(
     heuristic: Heuristic,
     clock: "_Clock | None" = None,
     qdepth: int = 0,
+    killers: Killers | None = None,
+    history: History | None = None,
 ) -> int:
     """alpha-beta + 着手順序 + 置換表 + 脅威枝刈り + D4対称性 + PVS の negamax。
 
@@ -269,24 +330,26 @@ def negamax(
         if threats:
             forced = threats  # 唯一の脅威柱を受ける1手に限定。
 
-    moves = forced if forced is not None else _ordered_moves(board, tt_move)
+    if forced is not None:
+        moves = forced
+    else:
+        killers_d = killers[depth] if killers is not None else None
+        history_p = history[me] if history is not None else None
+        moves = _ordered_moves(board, tt_move, killers_d, history_p)
     best = -INF
     best_move = -1
     first = True
     for col in moves:
         board.play(col)
+        args = (tt, heuristic, clock, qdepth, killers, history)
         if first:
-            value = -negamax(board, depth - 1, -beta, -alpha, tt, heuristic, clock, qdepth)
+            value = -negamax(board, depth - 1, -beta, -alpha, *args)
         else:
             # scout: 幅0のヌルウィンドウで「alpha を超えるか」だけ確かめる。
-            value = -negamax(
-                board, depth - 1, -alpha - 1, -alpha, tt, heuristic, clock, qdepth
-            )
+            value = -negamax(board, depth - 1, -alpha - 1, -alpha, *args)
             if alpha < value < beta:
                 # PV を更新しうる手。正確な値を得るため全幅で再探索。
-                value = -negamax(
-                    board, depth - 1, -beta, -alpha, tt, heuristic, clock, qdepth
-                )
+                value = -negamax(board, depth - 1, -beta, -alpha, *args)
         board.undo()
         if value > best:
             best = value
@@ -294,6 +357,8 @@ def negamax(
         if best > alpha:
             alpha = best
         if alpha >= beta:
+            if killers is not None and forced is None:
+                _update_cutoff(killers[depth], history, me, col, depth)
             break  # beta カット
         first = False
 
@@ -315,6 +380,8 @@ def _search_root(
     heuristic: Heuristic,
     clock: "_Clock | None" = None,
     qdepth: int = 0,
+    killers: Killers | None = None,
+    history: History | None = None,
 ) -> tuple[int, int]:
     """根を 1 段だけ PVS 展開し ``(score, best_move)`` を返す (フルウィンドウ)。"""
     me = board.turn
@@ -329,19 +396,18 @@ def _search_root(
     key, sym = canonical(board.bb[0], board.bb[1])
     entry = tt.get(key)
     tt_move = INV_COL_PERMS[sym][entry[3]] if entry is not None and entry[3] >= 0 else -1
+    killers_d = killers[depth] if killers is not None else None
+    history_p = history[me] if history is not None else None
     first = True
-    for col in _ordered_moves(board, tt_move):
+    args = (tt, heuristic, clock, qdepth, killers, history)
+    for col in _ordered_moves(board, tt_move, killers_d, history_p):
         board.play(col)
         if first:
-            value = -negamax(board, depth - 1, -INF, -alpha, tt, heuristic, clock, qdepth)
+            value = -negamax(board, depth - 1, -INF, -alpha, *args)
         else:
-            value = -negamax(
-                board, depth - 1, -alpha - 1, -alpha, tt, heuristic, clock, qdepth
-            )
+            value = -negamax(board, depth - 1, -alpha - 1, -alpha, *args)
             if value > alpha:  # 根では beta=INF なので上限ガードは不要。
-                value = -negamax(
-                    board, depth - 1, -INF, -alpha, tt, heuristic, clock, qdepth
-                )
+                value = -negamax(board, depth - 1, -INF, -alpha, *args)
         board.undo()
         if value > best:
             best = value
@@ -383,9 +449,10 @@ def search(
 
     work = board.copy()  # 締切で中断しても呼び出し側の盤面を壊さない
     deadline = time.monotonic() + time_limit if time_limit is not None else None
+    killers, history = _new_ordering_state(max_depth)  # 反復をまたいで再利用
 
     # 深さ1は無条件に完走 (最低限の手を保証)。
-    score, move = _search_root(work, 1, tt, heuristic, None, qdepth)
+    score, move = _search_root(work, 1, tt, heuristic, None, qdepth, killers, history)
     if abs(score) > MATE_LO:
         return score, move
 
@@ -394,7 +461,9 @@ def search(
             break
         clock = _Clock(deadline) if deadline is not None else None
         try:
-            score, move = _search_root(work, depth, tt, heuristic, clock, qdepth)
+            score, move = _search_root(
+                work, depth, tt, heuristic, clock, qdepth, killers, history
+            )
         except _Timeout:
             break  # 途中の反復は破棄し、直前に完了した結果を返す
         if abs(score) > MATE_LO:

@@ -15,7 +15,7 @@ CPU のみで高速・強力に動く Score Four 解析/対戦エンジンへ向
 |------:|------|:----:|------|
 | 1 | 計測基盤 (analyze + 統計 + PV, 固定時間ベンチ) | ✅ | `search.analyze` / `scripts/benchmark.py` / `benchmarks/baseline.json` |
 | 2 | Threat Quiescence + ダブルリーチ直接検出 | 🧪 | [`benchmarks/quiescence.md`](benchmarks/quiescence.md)（計測=中立→既定オフ） |
-| 3 | 着手順序強化 (killer / history) | ⏳ | 下記 |
+| 3 | 着手順序強化 (killer / history) | ✅ | 下記（ノード −37〜50% / 同一時間で深さ +6〜10） |
 | 4 | ホットループ最適化 (u16 mask / 差分評価 / D4 高速化) | ⏳ | 下記 |
 | 5 | TT 改善 (固定長 / 窓縮小 / aspiration) | ⏳ | 下記 |
 | 6 | 定石改善 (選択的 Book / リッチエントリ / shared TT) | ⏳ | 下記 |
@@ -40,16 +40,20 @@ depth==0 の地平線で強制手（即勝ち/唯一の受け/ダブル即勝ち
 100ms 0.467）だったため**既定 qdepth=0（オフ）**。実装は解析用途・長い持ち時間での再評価
 資産として保持。詳細 [`benchmarks/quiescence.md`](benchmarks/quiescence.md)。
 
-## Phase 3 — 着手順序強化 ⏳
+## Phase 3 — 着手順序強化 ✅
 
-現状は「TT手 → 中央寄り」。これに killer / history を加える。
+「TT手 → 中央寄り」に killer / history を追加。Python・Rust で**同一スコア式**にして
+言語横断の (score, best_move) 一致を維持（90/90）。即勝ち/強制受け/ダブルリーチは
+既存の脅威枝刈りが順序前に処理するため、ここでは TT手 → killer → history → 中央寄り の
+スコア順とした（history が空の初回反復は従来の中央寄り順に一致＝無害）。
 
-- 推奨順: TT手 → 即勝ち → 唯一の受け → ダブルリーチ生成 → 相手フォーク防止 → killer →
-  history → 中央寄り。16 列なので固定長スコア配列で軽量に。
-- killer: 各 ply で beta cutoff を起こした非戦術手を最大2件保存。
-- history: cutoff 時に `history[player][col] += depth*depth`、上限で減衰。
-- **受け入れ**: minimax 値不変・契約維持・同一深さでノード減・同一時間で完了深さ増を、
-  序盤/中盤/終盤に分けて中央値で確認（単一局面・単一シードで判断しない）。
+- killer: 各 depth で beta cutoff を起こした手を最大2件保存（重複登録なし）。
+- history: cutoff 時に `history[player][col] += depth*depth`、CAP 超で全体半減。
+- スコア定数は Python/Rust 共通: TT=4e9 > killer0=3e9 > killer1=2.9e9 > `history*16 + 中央`。
+
+**結果（受け入れ §16 を満たす）**: minimax 値不変（`search` 値=全幅 negamax 値）・契約維持
+（rs==py 90/90）・**同一深さでノード −37〜50%**（depth8/9/10）・**同一時間で完了深さ合計
++6〜+10**（50/100/300/1000ms）。序盤/中盤/終盤で確認、棚上げ無しで採用（既定オン）。
 
 ## Phase 4 — ホットループ最適化 ⏳
 
@@ -103,9 +107,9 @@ WASM 実行可・小サイズ・浮動小数の非決定性回避。
 
 ## 進め方の順序
 
-最優先は **Phase 3（着手順序強化）**。minimax 値を変えず同一時間で深さを上げる純粋な
-高速化で、契約を壊さず効果を測りやすい。次いで Phase 4/5（ノードコスト削減・TT 改善・
-aspiration）。その後 Phase 6/7（定石・詰み）、Phase 8（学習評価）、Phase 9 残り。
+Phase 3（着手順序強化）は完了。次は **Phase 4/5**（ノードコスト削減＝u16 mask・差分評価、
+TT 改善＝固定長・窓縮小・aspiration）。その後 Phase 6/7（定石・詰み）、Phase 8（学習評価）、
+Phase 9 残り。いずれも「変更前にベンチ保存→1変更ごと計測→改善が無ければ不採用」で進める。
 
 各 Phase は独立コミットで進め、**変更前後で nodes/NPS/深さ/勝率を記録**し、**改善が
 確認できない最適化は採用しない**（[`../CLAUDE.md`](../CLAUDE.md) の原則）。
