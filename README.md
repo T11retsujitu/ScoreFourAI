@@ -58,6 +58,7 @@ score-four-ai/
 │   ├── rules.md             # ゲームのルール
 │   ├── design.md            # 設計メモ（方針の全体像）
 │   ├── roadmap.md           # 強化ロードマップ（Phase別の状態・計画）
+│   ├── opening_book_windows.md # Windows(CPU)での環境構築〜定石生成ガイド
 │   ├── eval_measurements.md # 評価関数の自己対戦計測ログ
 │   └── benchmarks/          # 固定時間ベンチ・Phase別計測
 ├── src/score_four/
@@ -144,8 +145,10 @@ for c in [5, 6, 9, 10]: b.play(c)
 print(rs.search(b.bb[0], b.bb[1], 10))   # Python 探索と同値・約50〜60倍速
 "
 
-# 定石（生成 → 照会）。既知の序盤は探索せず即応する
-PYTHONPATH=src python scripts/generate_book.py 4 10 data/opening_book.json
+# 定石（生成 → 照会）。既知の序盤は探索せず即応する。選択的・途中保存・再開可能
+#   引数: max_plies depth out owner(0/1/both) opp_width ai_width（中断後は同コマンド再実行で続行）
+# Windows(CPU) での環境構築〜生成は docs/opening_book_windows.md を参照
+PYTHONPATH=src python scripts/generate_book.py 6 10 data/opening_book.json both 4 1
 PYTHONPATH=src python -c "
 from score_four.board import Board
 from score_four.book import load_book, choose_move
