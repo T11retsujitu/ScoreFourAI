@@ -79,6 +79,45 @@ class Board:
         self.key: int = 0  # Zobrist ハッシュ (占有のみ; 手番は手数の偶奇で一意)
         self._history: list[tuple[int, int | None]] = []  # (column, 着手前の winner)
 
+    @classmethod
+    def from_bitboards(cls, b0: int, b1: int) -> "Board":
+        """ビットボード (b0, b1) から局面を復元する (Rust の from_bitboards と同義)。
+
+        高さ・手番・Zobrist キー・勝者を占有から再計算する。重力ルール上、各柱は
+        下から詰まっているので高さ = その柱の占有数。手番は総手数の偶奇 (先手0)。
+        着手履歴は持たないため num_moves 分のプレースホルダで埋める (探索の make/unmake
+        は自分が積んだ手しか戻さないので安全)。解析・学習で (b0,b1) から評価するための補助。
+        """
+        board = cls()
+        board.bb = [b0, b1]
+        occ = b0 | b1
+        moves = 0
+        for c in range(NUM_COLUMNS):
+            h = 0
+            while h < N and occ & (1 << (c + h * 16)):
+                h += 1
+            board.heights[c] = h
+            moves += h
+        board.turn = moves & 1
+        key = 0
+        for player, bb in ((0, b0), (1, b1)):
+            bits = bb
+            while bits:
+                idx = (bits & -bits).bit_length() - 1
+                key ^= ZOBRIST[player][idx]
+                bits &= bits - 1
+        board.key = key
+        board.winner = None
+        for player, bb in ((0, b0), (1, b1)):
+            for mask in LINE_MASKS:
+                if bb & mask == mask:
+                    board.winner = player
+                    break
+            if board.winner is not None:
+                break
+        board._history = [(-1, None)] * moves  # num_moves/is_full 用 (順序は持たない)
+        return board
+
     # --- 照会 (純粋) -----------------------------------------------------
 
     def legal_moves(self) -> list[int]:
