@@ -4,17 +4,18 @@
 コミット済みの大きな book ファイルや Rust 拡張の有無に依存しない (Python/Rust の
 探索は契約テストで同値)。
 """
+import json
 import random
 from pathlib import Path
 
-import json
-
+import score_four.book as book_mod
 from score_four.board import Board
 from score_four.book import (
     book_entry,
     book_move,
     choose_move,
     generate_book,
+    generate_book_resumable,
     generate_selective,
     load_book,
     merge_book,
@@ -209,6 +210,49 @@ def test_selective_both_covers_both_sides() -> None:
     # book の手は合法。
     move, _ = book_move(both, Board())
     assert move in Board().legal_moves()
+
+
+def test_resumable_matches_in_memory(tmp_path: Path) -> None:
+    """完走した再開可能生成は in-memory の generate_selective(owner) と完全一致。"""
+    out = tmp_path / "book.json"
+    kw = dict(max_plies=3, depth=6, owner=0, ai_width=1, opp_width=2)
+    res = generate_book_resumable(out, **kw)
+    mem = generate_selective(**kw)
+    assert res == mem == load_book(out)
+    assert not (tmp_path / "book.json.ckpt.json").exists()  # 完走で ckpt 削除
+
+
+def test_resume_after_simulated_crash(tmp_path: Path) -> None:
+    """途中で落ちても、同一パラメータで再呼び出しすると最後まで完走し全量一致する。"""
+    out = tmp_path / "book.json"
+    kw = dict(max_plies=4, depth=6, owner=0, ai_width=1, opp_width=2, checkpoint_every=2)
+    full = generate_selective(max_plies=4, depth=6, owner=0, ai_width=1, opp_width=2)
+
+    # _engine_search を N 回でクラッシュさせて途中保存させる。
+    orig = book_mod._engine_search
+    calls = {"n": 0}
+
+    def crashing(board, depth, time_limit):
+        calls["n"] += 1
+        if calls["n"] > 5:
+            raise RuntimeError("simulated crash")
+        return orig(board, depth, time_limit)
+
+    book_mod._engine_search = crashing
+    try:
+        try:
+            generate_book_resumable(out, **kw)
+        except RuntimeError:
+            pass
+        assert out.exists()  # 途中保存されている
+        assert (tmp_path / "book.json.ckpt.json").exists()  # 再開状態あり
+    finally:
+        book_mod._engine_search = orig
+
+    # 再開 (正常な探索) → 完走し全量一致、ckpt 削除。
+    resumed = generate_book_resumable(out, **kw)
+    assert resumed == full
+    assert not (tmp_path / "book.json.ckpt.json").exists()
 
 
 def test_committed_book_loads_if_present() -> None:

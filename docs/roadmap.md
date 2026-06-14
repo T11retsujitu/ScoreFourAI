@@ -18,7 +18,7 @@ CPU のみで高速・強力に動く Score Four 解析/対戦エンジンへ向
 | 3 | 着手順序強化 (killer / history) | ✅ | 下記（ノード −37〜50% / 同一時間で深さ +6〜10） |
 | 4 | ホットループ最適化 (u16 mask ✅ / 差分評価 / D4 高速化) | ◑ | 下記（u16 mask: NPS +12〜15%） |
 | 5 | TT 改善 (固定長 / 窓縮小 / aspiration) | ◑ | 下記（aspiration: 計測=悪化→不採用） |
-| 6 | 定石改善 (選択的 Book / リッチエントリ / shared TT) | ⏳ | 下記 |
+| 6 | 定石改善 (選択的 Book / 途中保存・再開 / 追加編集) | ◑ | `book.py` / `scripts/generate_book.py`（下記） |
 | 7 | 詰み探索・問題生成 (mate solver / 問題自動生成) | ◑ | `solve.py` / `problems.py` / `scripts/generate_problems.py` |
 | 8 | 軽量学習評価 (深い αβ を教師) | 🧪 | 下記（計測=悪化→不採用） |
 | 9 | Web アプリ対応 (crate 分離 / WASM API / 難易度) | ◑ | `web/` / `rust/` |
@@ -85,12 +85,28 @@ depth==0 の地平線で強制手（即勝ち/唯一の受け/ダブル即勝ち
 - ⏳ **TT 境界で窓縮小**: depth 十分時に EXACT は return、LOWER は alpha↑、UPPER は beta↓
   （fail-soft 維持）。best_move のタイ挙動が変わるため Python+Rust 同時実装で契約維持。
 
-## Phase 6 — Opening Book 改善 ⏳
+## Phase 6 — Opening Book 改善 ◑
 
-全列挙は ply 増で爆発。**選択的 Book Tree** へ（AI 手番=最善+準最善+上位数手、相手手番=
-モード選択 exhaustive/principal/robust/human）。エントリを richにする（move/score/depth/
-bound/pv/nodes/engine_version/generated_at、形式バージョン付き）。生成中は **Engine を
-使い回し TT を共有**（`analyze_batch` / `clear_tt` / `new_generation`）。
+全列挙は ply 増で爆発するので **選択的 Book** ＋ **途中保存・追加編集可能**な生成へ。最終的に
+Web アプリへ載せ、book を正とした自己学習の土台にする（[`../CLAUDE.md`](../CLAUDE.md) の目的）。
+
+- ◑ 済（`book.py` / `scripts/generate_book.py`）:
+  - **形式 v2 lean エントリ** `(move, score, depth, ply)`。`depth` で追加編集の深さ単調更新・
+    学習時の品質フィルタが可能。`load_book` は **v1 後方互換**（depth=0 補完）。`book_entry`
+    で depth/ply も照会。`save_book` は一時ファイル→`os.replace` の **原子的差し替え**
+    （途中保存・Windows クラッシュ耐性）。`merge_book`（深い depth 優先）。
+  - **選択的生成** `generate_selective(max_plies, depth, owner, ai_width, opp_width)`: 自分手番は
+    上位 `ai_width` 手（既定1=principal）、相手手番は上位 `opp_width` 手（robust）に絞る。
+    `owner="both"` は先後両方を生成して merge（Web で両側応手）。plies4 で全列挙3286→選択8 と
+    大幅縮小。`_rank_children` で相手の上位数手を順位付け。
+  - **再開可能生成** `generate_book_resumable(out, ...)`: `out` と `out.ckpt.json` へ周期保存し、
+    中断後に同一パラメータで再実行すると **チェックポイントから継続**、完走で ckpt 削除。完走 book
+    は in-memory の `generate_selective(owner)` と完全一致（決定性・クラッシュ再開テスト済み）。
+    `scripts/generate_book.py` が owner 0/1/both・幅指定・再開に対応。
+- ⏳ 予定: **Web アプリへの book ロード**（コンパクト web book の書き出し＋JS の D4 照会 or
+  `sf_book_lookup`）、**book を正とした自己学習**（局面→最善手を policy 的に学ぶ。Phase 8 の
+  教訓に従い score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）
+  と生成時の Engine/TT 使い回しは必要になってから。
 
 ## Phase 7 — 詰み探索・問題生成 ◑
 

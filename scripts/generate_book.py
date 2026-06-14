@@ -1,29 +1,59 @@
-"""定石(opening book)を生成して JSON に保存するスクリプト。
+"""定石(opening book)を生成して JSON に保存するスクリプト (Phase 6: 選択的・再開可能)。
 
 使い方:
-    PYTHONPATH=src python scripts/generate_book.py [max_plies] [depth] [out_path]
+    PYTHONPATH=src python scripts/generate_book.py \
+        [max_plies] [depth] [out_path] [owner] [opp_width] [ai_width]
 
-固定深さ(depth)の探索で決定的に生成する(再現可能)。Rust 拡張があれば自動で使う。
+    owner: 0=先手 / 1=後手 / both=両側(既定)。both は owner0/owner1 を別ファイルに生成して
+           merge する。ai_width=自分手番の展開幅(既定1=principal)、opp_width=相手手番の幅
+           (既定4=robust。大きいほど exhaustive)。
+
+**途中保存・再開可能**: out_path と out_path.ckpt.json へ周期保存し、中断後に同じ引数で
+再実行すると続きから生成する(Windows CPU での長時間生成・追加延長向け)。Rust 拡張があれば
+自動で使う(無ければ純 Python 探索)。固定深さで決定的(再現可能)。
 """
 import sys
 import time
+from pathlib import Path
 
-from score_four.book import generate_book, save_book
+from score_four.book import generate_book_resumable, merge_book, save_book
+
+
+def _sidecar(out: Path, tag: str) -> Path:
+    return out.with_name(f"{out.stem}.{tag}{out.suffix}")
+
 
 def main() -> None:
-    max_plies = int(sys.argv[1]) if len(sys.argv) > 1 else 4
+    max_plies = int(sys.argv[1]) if len(sys.argv) > 1 else 6
     depth = int(sys.argv[2]) if len(sys.argv) > 2 else 10
-    out = sys.argv[3] if len(sys.argv) > 3 else "data/opening_book.json"
+    out = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("data/opening_book.json")
+    owner = sys.argv[4] if len(sys.argv) > 4 else "both"
+    opp_width = int(sys.argv[5]) if len(sys.argv) > 5 else 4
+    ai_width = int(sys.argv[6]) if len(sys.argv) > 6 else 1
     t = time.time()
 
-    def progress(ply: int, n_pos: int, total: int) -> None:
-        print(f"  ply{ply}: {n_pos} positions searched, {total} entries "
-              f"({time.time() - t:.0f}s)", flush=True)
+    def progress(ply: int, n: int) -> None:
+        print(f"  ply{ply}: {n} entries ({time.time() - t:.0f}s)", flush=True)
 
-    book = generate_book(max_plies=max_plies, depth=depth, on_ply=progress)
-    save_book(book, out)
-    print(f"generated {len(book)} entries (max_plies={max_plies}, depth={depth}) "
-          f"-> {out} in {time.time() - t:.1f}s")
+    common = dict(
+        max_plies=max_plies, depth=depth, ai_width=ai_width,
+        opp_width=opp_width, on_progress=progress,
+    )
+    if owner in ("0", "1"):
+        book = generate_book_resumable(out, owner=int(owner), **common)
+    else:  # both: 先手・後手ぶんを別ファイルに(各々再開可能)生成して merge。
+        print("owner=0 ...", flush=True)
+        a = generate_book_resumable(_sidecar(out, "own0"), owner=0, **common)
+        print("owner=1 ...", flush=True)
+        b = generate_book_resumable(_sidecar(out, "own1"), owner=1, **common)
+        book = merge_book(a, b)
+        save_book(book, out)
+        for tag in ("own0", "own1"):  # 完走後は中間ファイルを掃除
+            _sidecar(out, tag).unlink(missing_ok=True)
+
+    print(f"generated {len(book)} entries (max_plies={max_plies}, depth={depth}, "
+          f"owner={owner}, ai={ai_width}, opp={opp_width}) -> {out} in {time.time() - t:.1f}s")
+
 
 if __name__ == "__main__":
     main()

@@ -191,6 +191,112 @@ def generate_selective(
     return book
 
 
+CKPT_FORMAT = "score-four-book-ckpt/1"
+
+
+def _ckpt_path(out_path: Path) -> Path:
+    return out_path.with_name(out_path.name + ".ckpt.json")
+
+
+def _save_ckpt(
+    path: Path, params: dict, ply: int, frontier: list[Board], next_frontier: list[Board]
+) -> None:
+    """再開用の状態 (パラメータ・ply・未処理フロンティア) を原子的に保存する。"""
+    data = {
+        "format": CKPT_FORMAT,
+        "params": params,
+        "ply": ply,
+        "frontier": [[str(b.bb[0]), str(b.bb[1])] for b in frontier],
+        "next_frontier": [[str(b.bb[0]), str(b.bb[1])] for b in next_frontier],
+    }
+    _atomic_write(path, json.dumps(data, separators=(",", ":")))
+
+
+def _boards_from_ckpt(items: list[list[str]]) -> list[Board]:
+    return [Board.from_bitboards(int(a), int(b)) for a, b in items]
+
+
+def generate_book_resumable(
+    out_path: str | Path,
+    max_plies: int,
+    depth: int,
+    owner: int = 0,
+    ai_width: int = 1,
+    opp_width: int = 2,
+    time_limit: float | None = None,
+    checkpoint_every: int = 200,
+    on_progress: "Callable[[int, int], None] | None" = None,
+) -> Book:
+    """**途中保存・再開可能** な選択的定石生成 (owner は 0 か 1 の単一側)。
+
+    book を out_path へ、再開用状態を ``out_path.ckpt.json`` へ周期的に原子保存する
+    (checkpoint_every 局ごと＋各 ply 境界)。**中断後に同一パラメータで再呼び出しすると
+    チェックポイントから継続**し、完走すると ckpt を削除する。完走 book は in-memory の
+    ``generate_selective(..., owner)`` と完全一致 (探索の決定性より)。
+
+    owner="both" の book が欲しい場合は owner=0 と owner=1 を別ファイルに生成し
+    ``merge_book`` で統合する (各々が独立に再開可能)。Windows CPU での長時間生成・追加延長向け。
+    """
+    out_path = Path(out_path)
+    ckpt = _ckpt_path(out_path)
+    params = {
+        "max_plies": max_plies, "depth": depth, "owner": owner,
+        "ai_width": ai_width, "opp_width": opp_width,
+    }
+
+    book: Book = {}
+    frontier: list[Board] = [Board()]
+    next_frontier: list[Board] = []
+    ply = 0
+    if ckpt.exists() and out_path.exists():  # 再開を試みる
+        cdata = json.loads(ckpt.read_text(encoding="utf-8"))
+        if cdata.get("format") == CKPT_FORMAT and cdata.get("params") == params:
+            book = load_book(out_path)
+            ply = cdata["ply"]
+            frontier = _boards_from_ckpt(cdata["frontier"])
+            next_frontier = _boards_from_ckpt(cdata["next_frontier"])
+
+    seen: set[int] = set(book.keys())
+    for b in (*frontier, *next_frontier):
+        seen.add(canonical(b.bb[0], b.bb[1])[0])
+
+    since = 0
+    while ply <= max_plies:
+        while frontier:
+            board = frontier.pop()
+            if board.is_terminal():
+                continue
+            key, t = canonical(board.bb[0], board.bb[1])
+            score, best = _engine_search(board, depth, time_limit)
+            book[key] = (COL_PERMS[t][best], score, depth, ply)
+            if ply < max_plies:
+                width = ai_width if board.turn == owner else opp_width
+                for col in _children_to_expand(board, best, width, depth, time_limit):
+                    child = board.copy()
+                    child.play(col)
+                    ckey = canonical(child.bb[0], child.bb[1])[0]
+                    if ckey not in seen:
+                        seen.add(ckey)
+                        next_frontier.append(child)
+            since += 1
+            if since >= checkpoint_every:
+                save_book(book, out_path)
+                _save_ckpt(ckpt, params, ply, frontier, next_frontier)
+                since = 0
+        if on_progress is not None:
+            on_progress(ply, len(book))
+        frontier = next_frontier
+        next_frontier = []
+        ply += 1
+        save_book(book, out_path)  # ply 境界でチェックポイント
+        _save_ckpt(ckpt, params, ply, frontier, next_frontier)
+
+    save_book(book, out_path)
+    if ckpt.exists():
+        ckpt.unlink()  # 完走したので再開状態は不要
+    return book
+
+
 def book_move(book: Book, board: Board) -> tuple[int, int] | None:
     """book に board の手があれば (現局面の最善柱, score)、無ければ None。"""
     key, t = canonical(board.bb[0], board.bb[1])
@@ -247,18 +353,11 @@ def _normalize_entry(value: list[int]) -> Entry:
     raise ValueError(f"unrecognised book entry: {value!r}")
 
 
-def save_book(book: Book, path: str | Path) -> None:
-    """book を JSON で保存する (形式 v2・128bit キーは文字列化)。
+def _atomic_write(path: Path, text: str) -> None:
+    """text を path へ原子的に書く (一時ファイル→fsync→os.replace)。
 
-    一時ファイルへ書いてから os.replace で原子的に差し替える (途中保存・Windows での
-    クラッシュ耐性。書き込み中に死んでも既存ファイルは壊れない)。
+    書き込み中にプロセスが死んでも既存ファイルは壊れない (途中保存・Windows 耐性)。
     """
-    data = {
-        "format": FORMAT_V2,
-        "entries": {str(key): list(value) for key, value in book.items()},
-    }
-    text = json.dumps(data, separators=(",", ":"))
-    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
     try:
@@ -266,11 +365,20 @@ def save_book(book: Book, path: str | Path) -> None:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)  # 原子的差し替え
+        os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def save_book(book: Book, path: str | Path) -> None:
+    """book を JSON で保存する (形式 v2・128bit キーは文字列化・原子的差し替え)。"""
+    data = {
+        "format": FORMAT_V2,
+        "entries": {str(key): list(value) for key, value in book.items()},
+    }
+    _atomic_write(Path(path), json.dumps(data, separators=(",", ":")))
 
 
 def load_book(path: str | Path) -> Book:
