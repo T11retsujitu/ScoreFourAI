@@ -1,6 +1,7 @@
 # web/ (3D 対局アプリ + WASM エンジン) を GitHub Pages へデプロイする。
-# 初回のみリポジトリ設定の Pages > Source を "GitHub Actions" に変更すること。
-# engine.wasm はコミット済みなので、ここではビルドせず静的配信するだけ。
+# configure-pages の enablement:true で Pages の自動有効化を試みる。権限/組織設定で
+# 自動有効化できない場合は、初回のみ Settings > Pages > Source を "GitHub Actions" に
+# 手動で変更すること。engine.wasm はコミット済みなのでビルドせず静的配信するだけ。
 name: Deploy web app to Pages
 
 on:
@@ -27,6 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true   # Pages が未有効なら自動で有効化を試みる
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
