@@ -5,12 +5,39 @@
 //! (score, best_move) を一致させる (言語横断契約テスト)。
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::board::Board;
 use crate::evaluate::{eval_with, EvalConfig};
 use crate::symmetry::{canonical, col_perms, inv_col_perms};
+
+/// 置換表用の決定的ハッシャ。正規化キー(u128)は既に分散が良いので軽量な混合で十分。
+///
+/// std 既定の RandomState は OS 乱数で種を取るため wasm32-unknown-unknown では使えない
+/// (エントロピー源が無い)。固定混合にすることで wasm でも動き、プラットフォーム非依存で
+/// 決定的、かつ通常ビルドより高速になる。
+#[derive(Default)]
+struct KeyHasher(u64);
+
+impl Hasher for KeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    fn write_u128(&mut self, i: u128) {
+        let lo = i as u64;
+        let hi = (i >> 64) as u64;
+        self.0 = lo.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ hi.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    }
+}
+
+type Tt = HashMap<u128, TtEntry, BuildHasherDefault<KeyHasher>>;
 
 pub const WIN: i64 = 1_000_000;
 pub const INF: i64 = WIN * 2;
@@ -72,7 +99,7 @@ struct Timeout;
 type TtEntry = (u8, i64, u8, i8);
 
 struct Searcher {
-    tt: HashMap<u128, TtEntry>,
+    tt: Tt,
     deadline: Option<Instant>,
     nodes: u64,
     cfg: EvalConfig,
@@ -81,7 +108,7 @@ struct Searcher {
 impl Searcher {
     fn new(deadline: Option<Instant>, cfg: EvalConfig) -> Self {
         Searcher {
-            tt: HashMap::new(),
+            tt: Tt::default(),
             deadline,
             nodes: 0,
             cfg,
