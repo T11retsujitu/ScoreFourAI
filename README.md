@@ -63,9 +63,30 @@ score-four-ai/
 │   ├── Cargo.toml / pyproject.toml   # maturin ビルド設定
 │   └── src/{lib,board,lines,symmetry,evaluate,search}.rs
 ├── scripts/generate_book.py  # 定石生成スクリプト
+├── scripts/build_wasm.sh     # エンジンを WASM 化して web/ へ配置
 ├── data/opening_book.json    # 生成済み定石（再生成可能）
+├── web/                 # 3D 対局 Web アプリ（静的・WASM エンジン）
+│   ├── index.html / app.js / engine-worker.js
+│   └── engine.wasm      # ビルド済みエンジン（scripts/build_wasm.sh で再生成）
 └── tests/               # 参照実装・契約テスト（言語横断・D4不変性含む）
 ```
+
+## Web アプリ（3D 対局）
+
+`web/` は **エンジンと対局できる静的 Web アプリ**。検証済みの Rust エンジンを
+WebAssembly 化してブラウザ内で動かす（サーバ不要）。回せる3D盤＋4段スライス、
+柱クリックで着手、エンジンが Web Worker で応手、評価値・推奨手・脅威も表示する。
+
+```sh
+# エンジンを WASM にビルド（rustup target add wasm32-unknown-unknown が必要）
+./scripts/build_wasm.sh
+# ローカルで起動（fetch のため http 経由で開く）
+cd web && python3 -m http.server 8000   # → http://localhost:8000
+```
+
+デプロイ: `web/` を任意の静的ホスト（Netlify/Vercel 等）に置くだけ。GitHub Pages は
+`.github/workflows/pages.yml` で自動デプロイできる（初回のみ設定 > Pages > Source を
+"GitHub Actions" にする）。`engine.wasm` はコミット済みなのでビルド不要。
 
 ### Rust 高速版（任意・速度用）
 

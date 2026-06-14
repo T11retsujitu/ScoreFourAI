@@ -1,0 +1,34 @@
+# web/ (3D 対局アプリ + WASM エンジン) を GitHub Pages へデプロイする。
+# 初回のみリポジトリ設定の Pages > Source を "GitHub Actions" に変更すること。
+# engine.wasm はコミット済みなので、ここではビルドせず静的配信するだけ。
+name: Deploy web app to Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4

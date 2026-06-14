@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>立体4目並べ — エンジンと対局</title>
+<style>
+  :root{
+    --bg:#f3efe6; --panel:#fbf9f4; --line:#e0d8c8; --ink:#23262b; --muted:#73776f;
+    --maple:#d9c3a0; --maple-well:#cdb78f; --maple-grid:#b79a6e;
+    --p1:#2b2b30; --p2:#f5ecdc; --p2-ring:#c7b596;
+    --win:#d8920f; --threat:#2f8f83; --last:#3b6ea5; --hint:#2f8f83;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:"Helvetica Neue",Arial,"Hiragino Kaku Gothic ProN","Hiragino Sans","Noto Sans JP",sans-serif;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;padding:18px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:960px;margin:0 auto}
+  header h1{font-size:1.35rem;font-weight:800;letter-spacing:-.01em;margin:0 0 2px}
+  header p{margin:0;color:var(--muted);font-size:.9rem}
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px}
+  button,select{font-family:var(--sans);font-size:.85rem;cursor:pointer}
+  button.b{padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-weight:700}
+  button.b:hover:not(:disabled){border-color:var(--maple-grid)}
+  button.b:disabled{opacity:.4;cursor:default}
+  select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-weight:600}
+  .counter{font-family:var(--mono);font-size:.85rem;color:var(--muted);min-width:84px;text-align:center}
+  .toggle{display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--muted)}
+  .toggle input{accent-color:var(--threat);width:16px;height:16px}
+  .spacer{margin-left:auto}
+  .viewtabs{display:flex;gap:6px;margin-bottom:12px}
+  .vt{font-size:.82rem;font-weight:600;padding:7px 14px;border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:8px;cursor:pointer}
+  .vt.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .vt:disabled{opacity:.4;cursor:default}
+
+  .stage{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+  .left{flex:1 1 460px;min-width:300px}
+  .right{flex:1 1 240px;min-width:240px}
+
+  #board3d{position:relative;width:100%;height:min(74vw,440px);background:linear-gradient(180deg,#fcfaf5,#e9e0cf);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  #board3d canvas{display:block}
+  .hint3d{position:absolute;left:10px;bottom:10px;font-size:.74rem;color:var(--muted);background:rgba(255,255,255,.72);padding:3px 9px;border-radius:6px;pointer-events:none}
+
+  .slices{display:none;flex-wrap:wrap;gap:12px;margin:0}
+  .slice{flex:1 1 150px;min-width:140px;max-width:210px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
+  .slice h2{margin:0 0 8px;font-size:.78rem;font-weight:700;color:var(--muted);display:flex;justify-content:space-between;align-items:baseline}
+  .slice h2 span{font-family:var(--mono);font-weight:400;font-size:.7rem}
+  .files,.grid-row{display:grid;grid-template-columns:18px repeat(4,1fr);gap:3px;margin-bottom:3px}
+  .files div{font-family:var(--mono);font-size:.68rem;color:var(--muted);text-align:center}
+  .rank{font-family:var(--mono);font-size:.68rem;color:var(--muted);display:flex;align-items:center;justify-content:center}
+  .cell{aspect-ratio:1/1;background:var(--maple);border-radius:6px;position:relative;display:flex;align-items:center;justify-content:center;box-shadow:inset 0 0 0 1px var(--maple-grid)}
+  .peg{width:22%;height:22%;border-radius:50%;background:var(--maple-well);box-shadow:inset 0 1px 2px rgba(0,0,0,.25)}
+  .bead{width:76%;height:76%;border-radius:50%}
+  .bead.p1{background:radial-gradient(circle at 34% 30%,#56565e,var(--p1) 62%);box-shadow:0 1px 2px rgba(0,0,0,.4)}
+  .bead.p2{background:radial-gradient(circle at 34% 30%,#fff,var(--p2) 70%);box-shadow:inset 0 0 0 1px var(--p2-ring),0 1px 2px rgba(0,0,0,.18)}
+  .cell.last{box-shadow:inset 0 0 0 2px var(--last)}
+  .cell.win{box-shadow:inset 0 0 0 2px var(--win);background:#f0d79a}
+  .cell.threat{box-shadow:inset 0 0 0 2px var(--threat)}
+  .cell.threat .peg{background:var(--threat);opacity:.5}
+  @keyframes pop{from{transform:scale(.2);opacity:0}to{transform:scale(1);opacity:1}}
+  .bead.fresh{animation:pop .16s ease}
+
+  .droptitle{font-size:.78rem;font-weight:700;color:var(--muted);margin:14px 0 6px}
+  .dropgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;max-width:300px}
+  button.drop{display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 0;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+  button.drop .dn{font-family:var(--mono);font-weight:700;font-size:.82rem}
+  button.drop .dh{font-family:var(--mono);font-size:.66rem;color:var(--muted)}
+  button.drop:hover:not(:disabled){border-color:var(--maple-grid);background:#fffaf0}
+  button.drop:disabled{opacity:.4;cursor:default}
+  button.drop.hint{border-color:var(--hint);box-shadow:0 0 0 1px var(--hint)}
+
+  .info{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+  .status{font-size:.95rem;margin-bottom:8px}
+  .badge{display:inline-block;font-size:.82rem;font-weight:700;color:#fff;background:var(--win);border-radius:6px;padding:2px 9px}
+  .badge.p1{background:var(--p1)} .badge.p2{background:#9a8a6e}
+  .thinking{color:var(--threat);font-weight:700}
+  .turn{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+  .dot{width:13px;height:13px;border-radius:50%}
+  .dot.p1{background:var(--p1)} .dot.p2{background:var(--p2);box-shadow:inset 0 0 0 1px var(--p2-ring)}
+  .evalLine{font-size:.9rem;margin:2px 0}
+  .evalLine b.p1{color:var(--ink)} .evalLine b.p2{color:#8a6f3a}
+  .hintLine{font-size:.85rem;color:var(--threat);min-height:1.1em}
+  .moves{display:flex;flex-wrap:wrap;gap:4px}
+  .mv{font-family:var(--mono);font-size:.76rem;padding:2px 6px;border-radius:5px;border:1px solid var(--line)}
+  .mv.p1{background:#fff} .mv.p2{background:#f1ead9}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.76rem;color:var(--muted);margin-top:10px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:4px;display:inline-block}
+  .note{margin:14px 0 0;padding:8px 11px;border:1px dashed var(--maple-grid);border-radius:8px;background:#fff;color:var(--muted);font-size:.78rem}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>立体4目並べ — エンジンと対局</h1>
+    <p>4×4×4・重力あり（Score Four）。柱を選んで落とすと、Rust製エンジン（WASM）が応手します。</p>
+  </header>
+
+  <div class="controls">
+    <button class="b" id="btnNewBlack">新規（自分が先手・黒）</button>
+    <button class="b" id="btnNewWhite">新規（自分が後手・生成り）</button>
+    <button class="b" id="btnUndo">待った</button>
+    <label class="toggle">強さ
+      <select id="depthSel" aria-label="エンジンの探索深さ">
+        <option value="6">速い (6)</option>
+        <option value="8" selected>標準 (8)</option>
+        <option value="10">強い (10)</option>
+        <option value="12">最強 (12・遅い)</option>
+      </select>
+    </label>
+    <label class="toggle"><input type="checkbox" id="threatToggle">脅威を表示</label>
+    <span class="counter spacer" id="counter">手 0 / 64</span>
+  </div>
+
+  <div class="viewtabs" role="tablist">
+    <button id="view3d" class="vt active">回せる3D</button>
+    <button id="viewSlice" class="vt">4段スライス</button>
+  </div>
+
+  <div class="stage">
+    <div class="left">
+      <div id="board3d"><div class="hint3d">ドラッグで回転・ホイールで拡大・柱をクリックで着手</div></div>
+      <div class="slices" id="slices"></div>
+      <div class="droptitle">柱を選ぶ（クリックで落とす）</div>
+      <div class="dropgrid" id="dropGrid"></div>
+    </div>
+    <div class="right">
+      <div class="info">
+        <div class="status" id="status"></div>
+        <div class="evalLine" id="evalLine"></div>
+        <div class="hintLine" id="hintLine"></div>
+      </div>
+      <div style="font-size:.78rem;font-weight:700;color:var(--muted);margin-bottom:6px">手順</div>
+      <div class="moves" id="moveList"></div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--p1)"></i>先手（黒）</span>
+        <span><i class="sw" style="background:var(--p2);box-shadow:inset 0 0 0 1px var(--p2-ring)"></i>後手（生成り）</span>
+        <span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--last)"></i>直前の手</span>
+        <span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--win);background:#f0d79a"></i>勝ち筋</span>
+        <span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--threat)"></i>脅威</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    エンジンは検証済みの Rust 実装を WebAssembly 化したもの（Python 実装と同値を契約テストで保証）。
+    すべてブラウザ内で動き、サーバ不要・静的ホスティングでデプロイできます。
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
