@@ -230,7 +230,7 @@ def test_resume_after_simulated_crash(tmp_path: Path) -> None:
     orig = book_mod._engine_search
     calls = {"n": 0}
 
-    def crashing(board, depth, time_limit):
+    def crashing(board, depth, time_limit, engine=None):
         calls["n"] += 1
         if calls["n"] > 5:
             raise RuntimeError("simulated crash")
@@ -260,7 +260,7 @@ def test_extend_to_more_plies_reuses_existing(tmp_path: Path) -> None:
     orig = book_mod._engine_search
     calls = {"node": 0}
 
-    def counting(board, d, tl):
+    def counting(board, d, tl, engine=None):
         calls["node"] += 1
         return orig(board, d, tl)
 
@@ -277,7 +277,7 @@ def test_extend_to_more_plies_reuses_existing(tmp_path: Path) -> None:
     # フル再生成より探索回数が少ない (既存ノードを再探索していない)。
     fresh_calls = {"n": 0}
 
-    def counting2(board, d, tl):
+    def counting2(board, d, tl, engine=None):
         fresh_calls["n"] += 1
         return orig(board, d, tl)
 
@@ -348,6 +348,30 @@ def test_cutoff_truncates_decided_lines(tmp_path: Path) -> None:
     cut = generate_book_resumable(tmp_path / "cut.json", cutoff=1, **kw)
     assert set(cut).issubset(set(full))  # 打ち切りで訪れる局面は減る
     assert len(cut) < len(full)
+
+
+def test_shared_tt_generation_is_repeatable_and_valid() -> None:
+    """shared_tt=True の生成は反復可能 (同順序で同結果) で、合法手のみの妥当な book。
+
+    共有 TT は fresh とビット一致しない場合があるが、生成順が固定なので同一引数の再生成は
+    同じ book になる (決定的)。Rust 拡張が無ければ fresh にフォールバックするだけ。
+    """
+    kw = dict(max_plies=4, depth=6, owner=0, ai_width=1, opp_width=2, shared_tt=True)
+    a = generate_selective(**kw)
+    b = generate_selective(**kw)
+    assert a == b and len(a) > 0  # 反復可能・非空
+    move, _ = book_move(a, Board())
+    assert move in Board().legal_moves()  # 妥当 (合法手)
+
+
+def test_shared_tt_resumable_runs(tmp_path: Path) -> None:
+    """shared_tt=True で再開可能生成が走り、妥当な book を出力する。"""
+    out = tmp_path / "book.json"
+    book = generate_book_resumable(
+        out, max_plies=4, depth=6, owner=0, ai_width=1, opp_width=2, shared_tt=True
+    )
+    assert len(book) > 0 and book == load_book(out)
+    assert book_move(book, Board())[0] in Board().legal_moves()
 
 
 def test_expansion_collapses_forced_block() -> None:

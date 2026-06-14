@@ -73,6 +73,24 @@ def test_learned_eval_matches_python() -> None:
         assert rs.eval_learned(b.bb[0], b.bb[1], [1, 5, 25, -8, 0, 0]) == default_eval(b)
 
 
+def test_engine_fresh_matches_search() -> None:
+    """空 (fresh) の永続 Engine の search は rs.search と一致 (共有 TT 蓄積前)。"""
+    for b in _random_nonterminal(41, 40, 24):
+        eng = rs.Engine()
+        assert eng.search(b.bb[0], b.bb[1], 8) == rs.search(b.bb[0], b.bb[1], 8)
+
+
+def test_engine_tt_accumulates() -> None:
+    """Engine は search を重ねると TT を蓄積し、clear で空になる。"""
+    eng = rs.Engine()
+    assert eng.tt_size() == 0
+    for b in _random_nonterminal(42, 8, 20):
+        eng.search(b.bb[0], b.bb[1], 8)
+    assert eng.tt_size() > 0
+    eng.clear()
+    assert eng.tt_size() == 0
+
+
 def test_geometric_features_match_python() -> None:
     """Phase 10: 幾何・解放特徴 8 次元が Rust/Python で完全一致。"""
     from score_four.evaluate import geometric_features

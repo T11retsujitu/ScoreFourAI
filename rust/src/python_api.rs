@@ -367,6 +367,56 @@ fn py_analyze<'py>(
     Ok(d)
 }
 
+/// 局面間で置換表を共有する永続探索エンジン (定石生成の高速化用)。
+///
+/// `search` を繰り返すと TT が蓄積され、合流 (transposition) する部分木の読み直しを省ける。
+/// **注意**: 共有 TT は要求 depth 以上のエントリを再利用するため、結果は fresh な
+/// `rs.search` と必ずしもビット一致しない (探索順に依存。値は妥当 = 公称 depth 以上)。
+/// 既定評価のみ。空の (新規) エンジンの search は `rs.search` と一致する。
+#[pyclass]
+struct Engine {
+    tt: search::Tt,
+    cfg: EvalConfig,
+    qdepth: u8,
+}
+
+#[pymethods]
+impl Engine {
+    #[new]
+    fn new() -> Self {
+        Engine {
+            tt: search::new_tt(),
+            cfg: EvalConfig::default_config(),
+            qdepth: 0,
+        }
+    }
+
+    /// 既定評価で (score, best_move) を返す (共有 TT を使い回す)。
+    #[pyo3(signature = (b0, b1, max_depth, time_limit=None))]
+    fn search(&mut self, b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> (i64, i64) {
+        let (s, m) = search::search_persistent(
+            &mut self.tt,
+            b0,
+            b1,
+            max_depth,
+            time_limit,
+            self.cfg,
+            self.qdepth,
+        );
+        (s, m as i64)
+    }
+
+    /// TT を空にする (メモリ解放 / 新しい世代)。
+    fn clear(&mut self) {
+        self.tt.clear();
+    }
+
+    /// 現在の TT エントリ数 (診断用)。
+    fn tt_size(&self) -> usize {
+        self.tt.len()
+    }
+}
+
 /// 詰み探索 (Phase 7)。局面 (b0,b1) の強制勝ち/負けを零評価反復深化で読み切り、
 /// status / plies / best_move / pv を dict で返す。Python の solve.solve と一致する。
 /// status: "win" / "loss" / "draw" / "unknown" (手番側視点)。
@@ -441,5 +491,6 @@ fn score_four_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_solve, m)?)?;
     m.add_function(wrap_pyfunction!(py_play_match, m)?)?;
     m.add_class::<RustBoard>()?;
+    m.add_class::<Engine>()?;
     Ok(())
 }

@@ -19,7 +19,7 @@ use crate::symmetry::{canonical, col_perms, inv_col_perms};
 /// (エントロピー源が無い)。固定混合にすることで wasm でも動き、プラットフォーム非依存で
 /// 決定的、かつ通常ビルドより高速になる。
 #[derive(Default)]
-struct KeyHasher(u64);
+pub(crate) struct KeyHasher(u64);
 
 impl Hasher for KeyHasher {
     fn finish(&self) -> u64 {
@@ -37,7 +37,12 @@ impl Hasher for KeyHasher {
     }
 }
 
-type Tt = HashMap<u128, TtEntry, BuildHasherDefault<KeyHasher>>;
+pub(crate) type Tt = HashMap<u128, TtEntry, BuildHasherDefault<KeyHasher>>;
+
+/// 空の置換表を作る (永続エンジンが保持する共有 TT 用)。
+pub fn new_tt() -> Tt {
+    Tt::default()
+}
 
 pub const WIN: i64 = 1_000_000;
 pub const INF: i64 = WIN * 2;
@@ -90,7 +95,7 @@ fn terminal_value(board: &Board) -> Option<i64> {
 struct Timeout;
 
 /// 置換表エントリ: (depth, value, flag, best_move(正規形の柱) or -1)。
-type TtEntry = (u8, i64, u8, i8);
+pub(crate) type TtEntry = (u8, i64, u8, i8);
 
 struct Searcher {
     tt: Tt,
@@ -442,7 +447,50 @@ pub fn negamax_value_cfg(b0: u64, b1: u64, depth: u8, qdepth: u8, cfg: EvalConfi
     searcher.negamax(&mut board, depth, -INF, INF).unwrap_or(0) // 時間制御なしなので必ず Ok
 }
 
-/// 反復深化 + 時間制御 + 評価設定 cfg + 静穏化 qdepth で (score, best_move) を返す。
+impl Searcher {
+    /// 与えた tt を持つ Searcher を作る (永続/共有 TT 用)。
+    fn with_tt(tt: Tt, cfg: EvalConfig, qdepth: u8) -> Self {
+        let mut s = Searcher::new(None, cfg, qdepth);
+        s.tt = tt;
+        s
+    }
+
+    /// 反復深化本体 (深さ1 完走 → 時間制御つきで深める)。(score, best_move) を返す。
+    fn run_id(
+        &mut self,
+        board: &mut Board,
+        max_depth: u8,
+        deadline: Option<Instant>,
+    ) -> (i64, i32) {
+        let (mut score, mut mv) = self.search_root(board, 1).unwrap_or((0, -1));
+        if score.abs() > MATE_LO || max_depth <= 1 {
+            return (score, mv);
+        }
+        self.deadline = deadline;
+        let mut depth = 2u8;
+        while depth <= max_depth {
+            if let Some(d) = deadline {
+                if Instant::now() >= d {
+                    break;
+                }
+            }
+            match self.search_root(board, depth) {
+                Ok((s, m)) => {
+                    score = s;
+                    mv = m;
+                }
+                Err(_) => break, // 途中の反復は破棄し直前の結果を返す
+            }
+            if score.abs() > MATE_LO {
+                break;
+            }
+            depth += 1;
+        }
+        (score, mv)
+    }
+}
+
+/// 反復深化 + 時間制御 + 評価設定 cfg + 静穏化 qdepth で (score, best_move) を返す (fresh TT)。
 pub fn search_with_cfg(
     b0: u64,
     b1: u64,
@@ -453,35 +501,31 @@ pub fn search_with_cfg(
 ) -> (i64, i32) {
     let mut board = Board::from_bitboards(b0, b1);
     let deadline = time_limit.map(|s| Instant::now() + Duration::from_secs_f64(s));
-
-    // 深さ1 は無条件に完走 (最低限の手を保証)。
     let mut searcher = Searcher::new(None, cfg, qdepth);
-    let (mut score, mut mv) = searcher.search_root(&mut board, 1).unwrap_or((0, -1));
-    if score.abs() > MATE_LO || max_depth <= 1 {
-        return (score, mv);
-    }
+    searcher.run_id(&mut board, max_depth, deadline)
+}
 
-    searcher.deadline = deadline;
-    let mut depth = 2u8;
-    while depth <= max_depth {
-        if let Some(d) = deadline {
-            if Instant::now() >= d {
-                break;
-            }
-        }
-        match searcher.search_root(&mut board, depth) {
-            Ok((s, m)) => {
-                score = s;
-                mv = m;
-            }
-            Err(_) => break, // 途中の反復は破棄し直前の結果を返す
-        }
-        if score.abs() > MATE_LO {
-            break;
-        }
-        depth += 1;
-    }
-    (score, mv)
+/// 共有 TT を使い回して反復深化探索する (永続エンジン用)。tt は探索後の状態に更新される。
+///
+/// 局面間で TT (= transposition の計算結果) を再利用するため、合流する部分木の読み直しを
+/// 省ける = 定石生成が速くなる。**注意**: TT は要求 depth 以上のエントリを再利用するので、
+/// 近傍ノードが先に深く読んだ局面は「より深い値」で返りうる。値は妥当 (>= 公称 depth) だが
+/// 探索順に依存するため、共有 TT を使うと結果は fresh TT と必ずしもビット一致しない。
+pub fn search_persistent(
+    tt: &mut Tt,
+    b0: u64,
+    b1: u64,
+    max_depth: u8,
+    time_limit: Option<f64>,
+    cfg: EvalConfig,
+    qdepth: u8,
+) -> (i64, i32) {
+    let mut board = Board::from_bitboards(b0, b1);
+    let deadline = time_limit.map(|s| Instant::now() + Duration::from_secs_f64(s));
+    let mut searcher = Searcher::with_tt(std::mem::take(tt), cfg, qdepth);
+    let result = searcher.run_id(&mut board, max_depth, deadline);
+    *tt = std::mem::take(&mut searcher.tt); // 蓄積した TT を呼び出し側へ戻す
+    result
 }
 
 /// 探索の統計付き結果 (analyze の返り値)。qnodes は Phase2 (quiescence) 用の予約。

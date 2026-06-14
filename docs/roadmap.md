@@ -112,10 +112,15 @@ Web アプリへ載せ、book を正とした自己学習の土台にする（[`
     手数を接続して延長**できる）と **評価打ち切り `cutoff`**（|eval|≥N の決着済み変化を展開せず記録）
     に対応。`scripts/generate_book.py`（argparse）は owner 0/1/both・幅・`--profile`・`--cutoff`・
     再開・延長に対応。Windows ガイド: [`opening_book_windows.md`](opening_book_windows.md)。
+  - **共有 TT 高速化（opt-in）** `--shared-tt` / `shared_tt=True`: 局面間で置換表を共有する
+    永続エンジン（Rust `Engine` / `search::search_persistent`）で、合流（transposition）する
+    部分木の読み直しを省く（depth10/opp4 で約1.3倍、深いほど効く）。空 Engine の search は
+    `rs.search` と一致。**注意**: 共有 TT は要求より深いエントリも再利用するため結果は fresh と
+    ビット一致しないことがある（妥当・生成順固定で反復可能）。既定 off（厳密再現は fresh）。
 - ⏳ 予定: **Web アプリへの book ロード**（コンパクト web book の書き出し＋JS の D4 照会 or
   `sf_book_lookup`）、**book を正とした自己学習**（局面→最善手を policy 的に学ぶ。Phase 8 の
-  教訓に従い score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）
-  と生成時の Engine/TT 使い回しは必要になってから。
+  教訓に従い score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）は
+  必要になってから。
 
 ## Phase 7 — 詰み探索・問題生成 ◑
 

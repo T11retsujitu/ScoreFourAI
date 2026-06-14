@@ -52,6 +52,8 @@ def main() -> None:
                     help="フェーズ別 until:depth:ai:opp をカンマ区切り 例 8:10:1:6,16:14:1:4")
     ap.add_argument("--cutoff", type=int, default=None, help="|eval|>=N で変化を打ち切り")
     ap.add_argument("--time-ms", type=int, default=0, help=">0 で固定時間/手 (既定 0=固定深さ)")
+    ap.add_argument("--shared-tt", action="store_true",
+                    help="局面間で置換表を共有して高速化 (結果は fresh とビット一致しない場合あり)")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -66,7 +68,7 @@ def main() -> None:
     common = dict(
         max_plies=max_plies, depth=args.depth, ai_width=args.ai_width,
         opp_width=args.opp_width, time_limit=time_limit, profile=profile,
-        cutoff=args.cutoff, on_progress=progress,
+        cutoff=args.cutoff, on_progress=progress, shared_tt=args.shared_tt,
     )
     if args.owner in ("0", "1"):
         book = generate_book_resumable(out, owner=int(args.owner), **common)

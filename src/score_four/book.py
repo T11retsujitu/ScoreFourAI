@@ -34,11 +34,31 @@ Entry = tuple[int, int, int, int]
 Book = dict[int, Entry]
 
 
-def _engine_search(board: Board, depth: int, time_limit: float | None) -> tuple[int, int]:
-    """(score, best_move) を返す。Rust 拡張があれば使い、無ければ Python 探索。
+def _make_engine() -> object | None:
+    """局面間で TT を共有する永続エンジンを作る (無ければ None)。
 
-    どちらも既定評価 (検証済みパリティ ALL/-8) を使い、同じ結果を返す。
+    定石生成で合流 (transposition) する部分木の読み直しを省いて高速化する用。
+    Rust 拡張が未ビルドなら None (純 Python 探索にフォールバック)。
     """
+    try:
+        import score_four_rs as rs
+
+        return rs.Engine()
+    except (ImportError, AttributeError):  # 拡張なし / 旧ビルドで Engine 無し
+        return None
+
+
+def _engine_search(
+    board: Board, depth: int, time_limit: float | None, engine: object | None = None
+) -> tuple[int, int]:
+    """(score, best_move) を返す。engine があれば共有 TT で探索、無ければ fresh 探索。
+
+    どちらも既定評価 (検証済みパリティ ALL/-8)。engine 経由は近傍局面と TT を共有して速い
+    (探索順に依存し fresh とビット一致しない場合あり)。fresh 経路は Rust 拡張があれば使い、
+    無ければ純 Python 探索。
+    """
+    if engine is not None:
+        return engine.search(board.bb[0], board.bb[1], depth, time_limit)
     try:
         import score_four_rs as rs
 
@@ -54,13 +74,16 @@ def generate_book(
     depth: int,
     time_limit: float | None = None,
     on_ply: "Callable[[int, int, int], None] | None" = None,
+    shared_tt: bool = False,
 ) -> Book:
     """root から max_plies 手までの全局面を D4 正規化で列挙し、各局面の最善手を保存。
 
     各局面で固定深さ (depth) の反復深化探索を行い、最善手と評価値を記録する。
     非終端局面のみ保存 (終端には着手が無い)。決定的。``on_ply(ply, n_positions,
-    total)`` を渡すと各 ply 完了時に進捗を通知する。
+    total)`` を渡すと各 ply 完了時に進捗を通知する。``shared_tt=True`` で局面間 TT を共有し
+    高速化 (結果は fresh とビット一致しない場合あり)。
     """
+    engine = _make_engine() if shared_tt else None
     book: Book = {}
     seen: set[int] = set()
     # frontier は各 ply の正規化ユニークな代表局面。
@@ -73,7 +96,7 @@ def generate_book(
             key, t = canonical(board.bb[0], board.bb[1])
             if board.is_terminal():
                 continue
-            _score, move = _engine_search(board, depth, time_limit)
+            _score, move = _engine_search(board, depth, time_limit, engine)
             book[key] = (COL_PERMS[t][move], _score, depth, ply)
         if on_ply is not None:
             on_ply(ply, len(frontier), len(book))
@@ -99,7 +122,7 @@ def generate_book(
 
 
 def _rank_children(
-    board: Board, depth: int, time_limit: float | None
+    board: Board, depth: int, time_limit: float | None, engine: object | None = None
 ) -> list[tuple[int, int]]:
     """board の合法手を「手番側にとって良い順」に (柱, 値) で並べて返す (決定的)。
 
@@ -118,7 +141,7 @@ def _rank_children(
         elif child.is_terminal():
             cs = 0  # 引分
         else:
-            s, _ = _engine_search(child, max(1, depth - 1), time_limit)
+            s, _ = _engine_search(child, max(1, depth - 1), time_limit, engine)
             cs = -s  # 親 (手番側) 視点
         scored.append((cs, col))
     scored.sort(key=lambda x: (-x[0], x[1]))  # 値降順、同点は柱昇順 (決定的)
@@ -126,7 +149,8 @@ def _rank_children(
 
 
 def _children_to_expand(
-    board: Board, best: int, width: int, depth: int, time_limit: float | None
+    board: Board, best: int, width: int, depth: int,
+    time_limit: float | None, engine: object | None = None
 ) -> list[int]:
     """手番側視点で展開する子柱を返す (best を先頭に必ず含む)。
 
@@ -142,7 +166,7 @@ def _children_to_expand(
     if width <= 1:
         return [best]  # principal (最善のみ)。ランキング不要。
 
-    ranked = _rank_children(board, depth, time_limit)  # [(柱, 値)] 良い順
+    ranked = _rank_children(board, depth, time_limit, engine)  # [(柱, 値)] 良い順
     pool = [c for c, v in ranked if v > -MATE_LO]  # 敗北が確定した手は捨てる
     if best in pool:
         pool = [best, *(c for c in pool if c != best)]  # best を先頭へ
@@ -159,6 +183,7 @@ def generate_selective(
     opp_width: int = 2,
     time_limit: float | None = None,
     on_ply: "Callable[[int, int, int], None] | None" = None,
+    shared_tt: bool = False,
 ) -> Book:
     """**選択的** 定石を D4 正規化で生成する (全列挙より木を絞る)。
 
@@ -171,10 +196,12 @@ def generate_selective(
     全列挙 (generate_book) と違い ply 増でも木が緩やかにしか増えない。``on_ply`` で進捗通知。
     """
     if owner == "both":
-        b0 = generate_selective(max_plies, depth, 0, ai_width, opp_width, time_limit, on_ply)
-        b1 = generate_selective(max_plies, depth, 1, ai_width, opp_width, time_limit, on_ply)
+        kw = dict(time_limit=time_limit, on_ply=on_ply, shared_tt=shared_tt)
+        b0 = generate_selective(max_plies, depth, 0, ai_width, opp_width, **kw)
+        b1 = generate_selective(max_plies, depth, 1, ai_width, opp_width, **kw)
         return merge_book(b0, b1)
 
+    engine = _make_engine() if shared_tt else None
     book: Book = {}
     seen: set[int] = {canonical(0, 0)[0]}
     frontier: list[Board] = [Board()]
@@ -185,12 +212,12 @@ def generate_selective(
             if board.is_terminal():
                 continue
             key, t = canonical(board.bb[0], board.bb[1])
-            score, best = _engine_search(board, depth, time_limit)
+            score, best = _engine_search(board, depth, time_limit, engine)
             book[key] = (COL_PERMS[t][best], score, depth, ply)
             if ply == max_plies:
                 continue
             width = ai_width if board.turn == owner else opp_width
-            for col in _children_to_expand(board, best, width, depth, time_limit):
+            for col in _children_to_expand(board, best, width, depth, time_limit, engine):
                 child = board.copy()
                 child.play(col)
                 ckey = canonical(child.bb[0], child.bb[1])[0]
@@ -241,6 +268,7 @@ def generate_book_resumable(
     on_progress: "Callable[[int, int], None] | None" = None,
     profile: Profile | None = None,
     cutoff: int | None = None,
+    shared_tt: bool = False,
 ) -> Book:
     """**途中保存・再開・追加延長・フェーズ別**の選択的定石生成 (owner は 0 か 1)。
 
@@ -261,6 +289,7 @@ def generate_book_resumable(
     owner="both" は owner=0/1 を **同じ out_path** へ順に生成 (共有局面再利用で和集合)。
     """
     out_path = Path(out_path)
+    engine = _make_engine() if shared_tt else None
     book: Book = load_book(out_path) if out_path.exists() else {}
     seen: set[int] = {canonical(0, 0)[0]}
     frontier: list[Board] = [Board()]
@@ -278,7 +307,7 @@ def generate_book_resumable(
             if cur is not None and cur[2] >= d:
                 best, score = INV_COL_PERMS[t][cur[0]], cur[1]  # 十分な深さの既存を再利用
             else:
-                score, best = _engine_search(board, d, time_limit)
+                score, best = _engine_search(board, d, time_limit, engine)
                 book[key] = (COL_PERMS[t][best], score, d, ply)
                 since += 1
                 if since >= checkpoint_every:
@@ -288,7 +317,7 @@ def generate_book_resumable(
                 continue  # 評価が ±cutoff 以上 = 決着が見えた → この変化は打ち切り
             if ply < max_plies:
                 width = aw if board.turn == owner else ow
-                for col in _children_to_expand(board, best, width, d, time_limit):
+                for col in _children_to_expand(board, best, width, d, time_limit, engine):
                     child = board.copy()
                     child.play(col)
                     ckey = canonical(child.bb[0], child.bb[1])[0]
