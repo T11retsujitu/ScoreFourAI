@@ -249,3 +249,47 @@ pub fn line_potential(board: &Board) -> i64 {
 pub fn default_eval(board: &Board) -> i64 {
     eval_with(board, &EvalConfig::default_config())
 }
+
+// ---------------------------------------------------------------------------
+// 幾何セル分類 (Phase 10 実験・Commit 1)。**評価はまだ変更しない**(分類プリミティブのみ)。
+// 計画は docs/experiments/geometric_relational_eval.md。セルを「外側にある軸数」で 4 分類。
+// index = z*16 + y*4 + x。Python evaluate.py の CELL_TYPE と同値を契約テストで保証する。
+// 既存 Phase 8 の center 特徴 (中央2x2柱=16セル) とは別概念で、INTERIOR は立方体内部の
+// 8 セル (x,y,z すべて内側) を指す。
+// ---------------------------------------------------------------------------
+
+pub const CORNER: u8 = 0;
+pub const EDGE: u8 = 1;
+pub const FACE: u8 = 2;
+pub const INTERIOR: u8 = 3;
+
+const fn is_boundary(v: usize) -> bool {
+    v == 0 || v == 3
+}
+
+/// セル index (0..63) の幾何種類 CORNER/EDGE/FACE/INTERIOR (外側軸数で分類)。
+const fn cell_type(index: usize) -> u8 {
+    let x = index % 4;
+    let y = (index / 4) % 4;
+    let z = index / 16;
+    let outer = is_boundary(x) as u8 + is_boundary(y) as u8 + is_boundary(z) as u8;
+    match outer {
+        3 => CORNER,
+        2 => EDGE,
+        1 => FACE,
+        _ => INTERIOR,
+    }
+}
+
+const fn build_cell_type() -> [u8; 64] {
+    let mut a = [0u8; 64];
+    let mut i = 0;
+    while i < 64 {
+        a[i] = cell_type(i);
+        i += 1;
+    }
+    a
+}
+
+/// 64 セルの幾何種類 (Python evaluate.CELL_TYPE と一致)。
+pub const CELL_TYPE: [u8; 64] = build_cell_type();

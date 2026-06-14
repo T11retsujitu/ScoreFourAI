@@ -130,6 +130,13 @@ fn py_eval_cfg(
     evaluate::eval_with(&Board::from_bitboards(b0, b1), &cfg)
 }
 
+/// 64 セルの幾何種類 CORNER/EDGE/FACE/INTERIOR (Phase 10 実験)。Python の CELL_TYPE と一致。
+#[pyfunction]
+#[pyo3(name = "cell_types")]
+fn py_cell_types() -> Vec<u8> {
+    evaluate::CELL_TYPE.to_vec()
+}
+
 /// 局面 (b0,b1) の D4 不変な整数特徴量 [open1,open2,open3,parity,reach3,center] (先手-後手差)。
 /// 学習評価 (Phase 8) の教師データ生成・契約テスト用。Python の FEATURES と一致。
 #[pyfunction]
@@ -313,6 +320,7 @@ fn score_four_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_canonical, m)?)?;
     m.add_function(wrap_pyfunction!(py_eval_default, m)?)?;
     m.add_function(wrap_pyfunction!(py_eval_cfg, m)?)?;
+    m.add_function(wrap_pyfunction!(py_cell_types, m)?)?;
     m.add_function(wrap_pyfunction!(py_features, m)?)?;
     m.add_function(wrap_pyfunction!(py_eval_learned, m)?)?;
     m.add_function(wrap_pyfunction!(py_play_match_learned, m)?)?;

@@ -20,7 +20,7 @@ Connect Four の奇/偶脅威理論をそのまま移植できる保証はない
     parity_eval     : threat_eval に実験的なパリティ項を足した版 (重みは要計測)。
 """
 
-from .board import LINE_MASKS, Board
+from .board import CELL_LINES, LINE_MASKS, Board
 
 # あと何個で 4 並びかに応じたライン価値。占有 1/2/3 個を脅威として重み付け。
 # 0 個 (空ライン) は両者に等価値なので 0。4 個は勝利で終端側が扱うため評価に来ない。
@@ -215,3 +215,55 @@ def learned_eval(board: Board, weights: list[int]) -> int:
     f = features(board)
     score = sum(w * x for w, x in zip(weights, f, strict=True))
     return score if board.turn == 0 else -score
+
+
+# ---------------------------------------------------------------------------
+# 幾何セル分類 (Phase 10 実験・Commit 1)。**評価はまだ変更しない**（分類プリミティブのみ）。
+# 計画は docs/experiments/geometric_relational_eval.md。セルを「外側にある軸数」で 4 分類。
+# index = z*16 + y*4 + x。CORNER/INTERIOR は 7 本、EDGE/FACE は 4 本の勝利ラインに属する
+# （実 CELL_LINES で検証）。既存 Phase 8 の center 特徴（中央2x2柱=16セル）とは別概念で、
+# INTERIOR は立方体内部の 8 セル（x,y,z すべて内側）を指す。
+# ---------------------------------------------------------------------------
+
+CORNER, EDGE, FACE, INTERIOR = 0, 1, 2, 3
+CELL_TYPE_NAMES = ("CORNER", "EDGE", "FACE", "INTERIOR")
+
+
+def _is_boundary(v: int) -> bool:
+    """座標値 v が外側（0 または 3）か。"""
+    return v in (0, 3)
+
+
+def cell_type(index: int) -> int:
+    """セル index (0..63) の幾何種類 CORNER/EDGE/FACE/INTERIOR を返す（外側軸数で分類）。"""
+    x, y, z = index % 4, (index // 4) % 4, index // 16
+    outer = _is_boundary(x) + _is_boundary(y) + _is_boundary(z)
+    return {3: CORNER, 2: EDGE, 1: FACE, 0: INTERIOR}[outer]
+
+
+# 64 セルの種類（Rust CELL_TYPE と一致）。
+CELL_TYPE: tuple[int, ...] = tuple(cell_type(i) for i in range(64))
+# 種類別のセルビットマスク（4 種で 64 セルを分割）。
+CELL_TYPE_MASKS: tuple[int, ...] = tuple(
+    sum(1 << i for i in range(64) if CELL_TYPE[i] == t) for t in range(4)
+)
+# 各セルが属する勝利ライン数（CORNER/INTERIOR=7, EDGE/FACE=4）。
+CELL_LINE_DEGREE: tuple[int, ...] = tuple(len(CELL_LINES[i]) for i in range(64))
+
+# 柱クラス: 底面 (x,y) の外側性で 角柱 / 辺柱 / 中央柱 に分ける。
+COLUMN_CORNER, COLUMN_EDGE, COLUMN_CENTER = 0, 1, 2
+
+
+def column_class(col: int) -> int:
+    """柱 col (0..15) のクラス COLUMN_CORNER/EDGE/CENTER を返す（底面 x,y の外側性で分類）。"""
+    x, y = col % 4, col // 4
+    bx, by = _is_boundary(x), _is_boundary(y)
+    if bx and by:
+        return COLUMN_CORNER
+    if not bx and not by:
+        return COLUMN_CENTER
+    return COLUMN_EDGE
+
+
+# 16 柱のクラス（角柱4 / 辺柱8 / 中央柱4）。
+COLUMN_CLASS: tuple[int, ...] = tuple(column_class(c) for c in range(16))
