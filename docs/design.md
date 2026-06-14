@@ -156,4 +156,9 @@ note の qweral 氏は、立体四目並べを段階的に攻略している。
 - **強化**（[`docs/roadmap.md`](roadmap.md)）：計測基盤（`analyze`／固定時間ベンチ）、着手順序強化
   （killer/history でノード −37〜50%）、u16 move mask（NPS +12〜15%）を採用。Threat Quiescence・
   Aspiration Window は計測で中立/悪化につき不採用（資産として保持）。
-- AlphaZero は未着手（α-β がまだ頭打ちでないため、設計通り後回し。学習評価は roadmap Phase 8）。
+- **強化 Phase 8（軽量学習評価）**: 深い αβ を教師にした D4 不変・整数線形評価を実装・計測。
+  教師スコアへの当てはまりは既定パリティより良い（R² 0.78 vs 0.55）が、固定時間自己対戦では
+  全条件で負け越し（winrate 0.22〜0.32）＝「fit ≠ strength」。**不採用・資産として保持**
+  （[`roadmap.md`](roadmap.md) / [`eval_measurements.md`](eval_measurements.md) 仮説5）。
+- AlphaZero は未着手（α-β がまだ頭打ちでないため、設計通り後回し）。学習評価は上記 Phase 8 で
+  線形モデルを試し不採用。次の派生候補は勝敗教師のロジスティック学習。
