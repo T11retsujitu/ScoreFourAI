@@ -16,11 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from score_four.book import generate_book_resumable, merge_book, save_book
-
-
-def _sidecar(out: Path, tag: str) -> Path:
-    return out.with_name(f"{out.stem}.{tag}{out.suffix}")
+from score_four.book import generate_book_resumable
 
 
 def main() -> None:
@@ -41,15 +37,11 @@ def main() -> None:
     )
     if owner in ("0", "1"):
         book = generate_book_resumable(out, owner=int(owner), **common)
-    else:  # both: 先手・後手ぶんを別ファイルに(各々再開可能)生成して merge。
+    else:  # both: 同じ out へ owner=0 → owner=1 を順に生成 (共有局面は再利用され和集合になる)。
         print("owner=0 ...", flush=True)
-        a = generate_book_resumable(_sidecar(out, "own0"), owner=0, **common)
+        generate_book_resumable(out, owner=0, **common)
         print("owner=1 ...", flush=True)
-        b = generate_book_resumable(_sidecar(out, "own1"), owner=1, **common)
-        book = merge_book(a, b)
-        save_book(book, out)
-        for tag in ("own0", "own1"):  # 完走後は中間ファイルを掃除
-            _sidecar(out, tag).unlink(missing_ok=True)
+        book = generate_book_resumable(out, owner=1, **common)
 
     print(f"generated {len(book)} entries (max_plies={max_plies}, depth={depth}, "
           f"owner={owner}, ai={ai_width}, opp={opp_width}) -> {out} in {time.time() - t:.1f}s")

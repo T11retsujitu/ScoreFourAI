@@ -219,16 +219,14 @@ def test_resumable_matches_in_memory(tmp_path: Path) -> None:
     res = generate_book_resumable(out, **kw)
     mem = generate_selective(**kw)
     assert res == mem == load_book(out)
-    assert not (tmp_path / "book.json.ckpt.json").exists()  # 完走で ckpt 削除
 
 
 def test_resume_after_simulated_crash(tmp_path: Path) -> None:
-    """途中で落ちても、同一パラメータで再呼び出しすると最後まで完走し全量一致する。"""
+    """途中で落ちても、同一引数で再呼び出しすると最後まで完走し全量一致する。"""
     out = tmp_path / "book.json"
     kw = dict(max_plies=4, depth=6, owner=0, ai_width=1, opp_width=2, checkpoint_every=2)
     full = generate_selective(max_plies=4, depth=6, owner=0, ai_width=1, opp_width=2)
 
-    # _engine_search を N 回でクラッシュさせて途中保存させる。
     orig = book_mod._engine_search
     calls = {"n": 0}
 
@@ -244,15 +242,76 @@ def test_resume_after_simulated_crash(tmp_path: Path) -> None:
             generate_book_resumable(out, **kw)
         except RuntimeError:
             pass
-        assert out.exists()  # 途中保存されている
-        assert (tmp_path / "book.json.ckpt.json").exists()  # 再開状態あり
+        assert out.exists()  # 途中保存されている (book ファイル自体がチェックポイント)
     finally:
         book_mod._engine_search = orig
 
-    # 再開 (正常な探索) → 完走し全量一致、ckpt 削除。
-    resumed = generate_book_resumable(out, **kw)
+    resumed = generate_book_resumable(out, **kw)  # 再開 → 完走し全量一致
     assert resumed == full
-    assert not (tmp_path / "book.json.ckpt.json").exists()
+
+
+def test_extend_to_more_plies_reuses_existing(tmp_path: Path) -> None:
+    """完走 book を max_plies を増やして再実行すると、延長され既存手数は再探索しない。"""
+    out = tmp_path / "book.json"
+    kw = dict(depth=6, owner=0, ai_width=1, opp_width=2)
+    small = dict(generate_book_resumable(out, max_plies=3, **kw))  # 3 手まで完走
+
+    # 4 手へ延長。既存 (3 手まで) は再探索されず、新規の局面だけ探索される。
+    orig = book_mod._engine_search
+    calls = {"node": 0}
+
+    def counting(board, d, tl):
+        calls["node"] += 1
+        return orig(board, d, tl)
+
+    book_mod._engine_search = counting
+    try:
+        big = generate_book_resumable(out, max_plies=4, **kw)
+    finally:
+        book_mod._engine_search = orig
+
+    # 延長結果は最初から 4 手で作った選択的 book と一致 (再利用しても等価)。
+    assert big == generate_selective(max_plies=4, **kw)
+    # 既存 3 手のエントリは保持され、4 手 book はそれを包含する。
+    assert set(small).issubset(set(big)) and len(big) > len(small)
+    # フル再生成より探索回数が少ない (既存ノードを再探索していない)。
+    fresh_calls = {"n": 0}
+
+    def counting2(board, d, tl):
+        fresh_calls["n"] += 1
+        return orig(board, d, tl)
+
+    book_mod._engine_search = counting2
+    try:
+        generate_book_resumable(tmp_path / "fresh.json", max_plies=4, **kw)
+    finally:
+        book_mod._engine_search = orig
+    assert calls["node"] < fresh_calls["n"]
+
+
+def test_deepen_upgrades_visited_entries(tmp_path: Path) -> None:
+    """depth を増やして再実行すると、深い探索木の各局面が depth8 へ更新される。
+
+    注: depth を変えると最善手・順位が変わり選択的木の形が変わりうるので、浅い木にしか
+    無かった局面は古い depth のまま残る (book は深い木を包含する superset になる)。
+    クリーンに作り直したいときは別ファイルへ生成する。
+    """
+    out = tmp_path / "book.json"
+    generate_book_resumable(out, max_plies=2, depth=4, owner=0, ai_width=1, opp_width=2)
+    deep = generate_book_resumable(out, max_plies=2, depth=8, owner=0, ai_width=1, opp_width=2)
+    sel8 = generate_selective(max_plies=2, depth=8, owner=0, ai_width=1, opp_width=2)
+    # depth8 の木の各エントリは深く更新されて book に存在する。
+    assert all(deep[k] == sel8[k] for k in sel8)
+    assert set(sel8).issubset(set(deep))
+
+
+def test_both_into_same_file_equals_selective_both(tmp_path: Path) -> None:
+    """同じ out へ owner=0→owner=1 を生成すると generate_selective('both') と一致。"""
+    out = tmp_path / "book.json"
+    kw = dict(max_plies=3, depth=6, ai_width=1, opp_width=2)
+    generate_book_resumable(out, owner=0, **kw)
+    both = generate_book_resumable(out, owner=1, **kw)
+    assert both == generate_selective(owner="both", **kw)
 
 
 def test_committed_book_loads_if_present() -> None:

@@ -198,24 +198,6 @@ def _ckpt_path(out_path: Path) -> Path:
     return out_path.with_name(out_path.name + ".ckpt.json")
 
 
-def _save_ckpt(
-    path: Path, params: dict, ply: int, frontier: list[Board], next_frontier: list[Board]
-) -> None:
-    """再開用の状態 (パラメータ・ply・未処理フロンティア) を原子的に保存する。"""
-    data = {
-        "format": CKPT_FORMAT,
-        "params": params,
-        "ply": ply,
-        "frontier": [[str(b.bb[0]), str(b.bb[1])] for b in frontier],
-        "next_frontier": [[str(b.bb[0]), str(b.bb[1])] for b in next_frontier],
-    }
-    _atomic_write(path, json.dumps(data, separators=(",", ":")))
-
-
-def _boards_from_ckpt(items: list[list[str]]) -> list[Board]:
-    return [Board.from_bitboards(int(a), int(b)) for a, b in items]
-
-
 def generate_book_resumable(
     out_path: str | Path,
     max_plies: int,
@@ -227,48 +209,45 @@ def generate_book_resumable(
     checkpoint_every: int = 200,
     on_progress: "Callable[[int, int], None] | None" = None,
 ) -> Book:
-    """**途中保存・再開可能** な選択的定石生成 (owner は 0 か 1 の単一側)。
+    """**途中保存・再開・追加延長**できる選択的定石生成 (owner は 0 か 1 の単一側)。
 
-    book を out_path へ、再開用状態を ``out_path.ckpt.json`` へ周期的に原子保存する
-    (checkpoint_every 局ごと＋各 ply 境界)。**中断後に同一パラメータで再呼び出しすると
-    チェックポイントから継続**し、完走すると ckpt を削除する。完走 book は in-memory の
-    ``generate_selective(..., owner)`` と完全一致 (探索の決定性より)。
+    **book ファイル自体がチェックポイント**。out_path を読み込み、root から max_plies まで
+    D4 正規化で再列挙しながら、**既に depth 以上で探索済みの局面は再探索せず再利用**し、
+    未探索・浅い局面だけを探索する。checkpoint_every 局ごと＋各 ply 境界で原子保存。
 
-    owner="both" の book が欲しい場合は owner=0 と owner=1 を別ファイルに生成し
-    ``merge_book`` で統合する (各々が独立に再開可能)。Windows CPU での長時間生成・追加延長向け。
+    これにより 1 つの呼び出しで次がすべて成り立つ:
+      - **中断後の再開**: 同じ引数で再実行すると、途中保存された book から続きを生成。
+      - **追加延長**: 完走した book に対し **max_plies を増やして再実行**すると、既存エントリを
+        再利用して新しい手数ぶんだけ探索する (14手目まで→15手目へ等)。
+      - **深さ更新**: depth を増やすと、浅い既存エントリだけ深く探索し直す (品質単調)。
+
+    完走 book は in-memory の ``generate_selective(..., owner)`` と一致 (同 depth・決定的)。
+    owner="both" の book は owner=0 と owner=1 を **同じ out_path** へ順に生成すればよい
+    (共有局面は再利用され、和集合が得られる)。Windows CPU での長時間生成・追加延長向け。
     """
     out_path = Path(out_path)
-    ckpt = _ckpt_path(out_path)
-    params = {
-        "max_plies": max_plies, "depth": depth, "owner": owner,
-        "ai_width": ai_width, "opp_width": opp_width,
-    }
-
-    book: Book = {}
+    book: Book = load_book(out_path) if out_path.exists() else {}
+    seen: set[int] = {canonical(0, 0)[0]}
     frontier: list[Board] = [Board()]
-    next_frontier: list[Board] = []
-    ply = 0
-    if ckpt.exists() and out_path.exists():  # 再開を試みる
-        cdata = json.loads(ckpt.read_text(encoding="utf-8"))
-        if cdata.get("format") == CKPT_FORMAT and cdata.get("params") == params:
-            book = load_book(out_path)
-            ply = cdata["ply"]
-            frontier = _boards_from_ckpt(cdata["frontier"])
-            next_frontier = _boards_from_ckpt(cdata["next_frontier"])
-
-    seen: set[int] = set(book.keys())
-    for b in (*frontier, *next_frontier):
-        seen.add(canonical(b.bb[0], b.bb[1])[0])
-
     since = 0
-    while ply <= max_plies:
-        while frontier:
-            board = frontier.pop()
+
+    for ply in range(max_plies + 1):
+        next_frontier: list[Board] = []
+        for board in frontier:
             if board.is_terminal():
                 continue
             key, t = canonical(board.bb[0], board.bb[1])
-            score, best = _engine_search(board, depth, time_limit)
-            book[key] = (COL_PERMS[t][best], score, depth, ply)
+            cur = book.get(key)
+            if cur is not None and cur[2] >= depth:
+                best = INV_COL_PERMS[t][cur[0]]  # 十分な深さの既存エントリを再利用
+            else:
+                score, mv = _engine_search(board, depth, time_limit)
+                book[key] = (COL_PERMS[t][mv], score, depth, ply)
+                best = mv
+                since += 1
+                if since >= checkpoint_every:
+                    save_book(book, out_path)
+                    since = 0
             if ply < max_plies:
                 width = ai_width if board.turn == owner else opp_width
                 for col in _children_to_expand(board, best, width, depth, time_limit):
@@ -278,22 +257,13 @@ def generate_book_resumable(
                     if ckey not in seen:
                         seen.add(ckey)
                         next_frontier.append(child)
-            since += 1
-            if since >= checkpoint_every:
-                save_book(book, out_path)
-                _save_ckpt(ckpt, params, ply, frontier, next_frontier)
-                since = 0
         if on_progress is not None:
             on_progress(ply, len(book))
         frontier = next_frontier
-        next_frontier = []
-        ply += 1
-        save_book(book, out_path)  # ply 境界でチェックポイント
-        _save_ckpt(ckpt, params, ply, frontier, next_frontier)
+        save_book(book, out_path)  # ply 境界で保存
 
     save_book(book, out_path)
-    if ckpt.exists():
-        ckpt.unlink()  # 完走したので再開状態は不要
+    _ckpt_path(out_path).unlink(missing_ok=True)  # 旧版の ckpt が残っていれば掃除
     return book
 
 

@@ -99,10 +99,13 @@ Web アプリへ載せ、book を正とした自己学習の土台にする（[`
     上位 `ai_width` 手（既定1=principal）、相手手番は上位 `opp_width` 手（robust）に絞る。
     `owner="both"` は先後両方を生成して merge（Web で両側応手）。plies4 で全列挙3286→選択8 と
     大幅縮小。`_rank_children` で相手の上位数手を順位付け。
-  - **再開可能生成** `generate_book_resumable(out, ...)`: `out` と `out.ckpt.json` へ周期保存し、
-    中断後に同一パラメータで再実行すると **チェックポイントから継続**、完走で ckpt 削除。完走 book
-    は in-memory の `generate_selective(owner)` と完全一致（決定性・クラッシュ再開テスト済み）。
-    `scripts/generate_book.py` が owner 0/1/both・幅指定・再開に対応。
+  - **再開・追加延長できる生成** `generate_book_resumable(out, ...)`: **book ファイル自体が
+    チェックポイント**。out を読み、root から再列挙しつつ **depth 以上で探索済みの局面は再利用**、
+    未探索だけを探索して周期的に原子保存。これで (a) 中断後の再開、(b) **max_plies を増やしての
+    追加延長（同 depth は既存を再利用、例 14→15 手）**、(c) depth 増での深さ更新、がすべて同じ
+    呼び出しで成立。完走 book は `generate_selective(owner)` と一致（延長・クラッシュ再開テスト済み）。
+    `scripts/generate_book.py` は owner 0/1/both（both は同ファイルへ 2 パス）・幅指定・再開・延長に対応。
+    Windows ガイド: [`opening_book_windows.md`](opening_book_windows.md)。
 - ⏳ 予定: **Web アプリへの book ロード**（コンパクト web book の書き出し＋JS の D4 照会 or
   `sf_book_lookup`）、**book を正とした自己学習**（局面→最善手を policy 的に学ぶ。Phase 8 の
   教訓に従い score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）
