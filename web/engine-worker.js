@@ -25,5 +25,19 @@ self.onmessage = async (ev) => {
       score: exports.sf_score().toString(),
       move: exports.sf_move() | 0,
     });
+  } else if (msg.type === "solve") {
+    // 詰み探索 (Phase 7)。status 0=unknown,1=win,2=loss,3=draw。
+    exports.sf_solve(b0, b1, msg.maxPlies | 0);
+    const len = exports.sf_solve_pv_len() | 0;
+    const pv = [];
+    for (let i = 0; i < len; i++) pv.push(exports.sf_solve_pv(i) | 0);
+    self.postMessage({
+      type: "solve",
+      id: msg.id,
+      status: exports.sf_solve_status() | 0,
+      plies: exports.sf_solve_plies() | 0,
+      move: exports.sf_solve_move() | 0,
+      pv,
+    });
   }
 };

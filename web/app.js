@@ -5,6 +5,7 @@
 "use strict";
 
 const WIN = 1000000, MATE_LO = 999935;
+const SOLVE_MAX = 13;   // 詰み探索の地平線 (手番側〜7手詰めまで)。応答性のため上限を設ける。
 const $ = (id) => document.getElementById(id);
 const cellIdx = (x, y, z) => z * 16 + y * 4 + x;
 const colXY = (c) => [c % 4, Math.floor(c / 4)];           // col -> [x,y]
@@ -72,6 +73,17 @@ function replay(history) {
   return { b0, b1, heights, turn, lastIdx, winner, winCells, threats, full };
 }
 
+/* 詰み手順 (柱列) を、現局面から積んだときの着地セル index 列に変換する。 */
+function pvCells(heights, pv) {
+  const h = heights.slice(), cells = [];
+  for (const c of pv) {
+    if (c < 0 || c > 15 || h[c] >= 4) break;
+    const [x, y] = colXY(c);
+    cells.push(cellIdx(x, y, h[c])); h[c] += 1;
+  }
+  return cells;
+}
+
 /* ====== ゲーム状態 ====== */
 const game = {
   history: [],
@@ -82,12 +94,23 @@ const game = {
   thinking: false,
   reqId: 0,
   analysis: null,     // {score, move} 現局面のエンジン評価
+  solving: false,
+  solveSeq: 0,
+  mate: null,         // 詰み探索結果 {status, plies, move, pv, turn} (現局面のもの)
 };
 
 /* ====== Worker ====== */
 const worker = new Worker("engine-worker.js");
 worker.onmessage = (ev) => {
   const msg = ev.data;
+  if (msg.type === "solve") {               // 詰み探索の結果 (solveSeq で照合)
+    if (msg.id !== game.solveSeq) return;
+    game.solving = false;
+    const st = replay(game.history);
+    game.mate = { status: msg.status, plies: msg.plies, move: msg.move, pv: msg.pv, turn: st.turn };
+    render();
+    return;
+  }
   if (msg.id !== game.reqId) return;       // 古い結果は無視
   game.thinking = false;
   const score = Number(BigInt(msg.score));
@@ -116,18 +139,33 @@ function requestEngineOrAnalysis() {
 }
 
 /* ====== 操作 ====== */
+function clearMate() {                            // 局面が変わったら詰み結果を無効化
+  game.mate = null; game.solving = false; game.solveSeq++;
+}
+function requestSolve() {
+  const st = replay(game.history);
+  if (st.winner !== null || st.full || game.thinking || game.solving) return;
+  game.mate = null; game.solving = true;
+  const seq = ++game.solveSeq;
+  render();
+  worker.postMessage({
+    type: "solve", id: seq,
+    b0: st.b0.toString(), b1: st.b1.toString(), maxPlies: SOLVE_MAX,
+  });
+}
 function drop(col) {
   const st = replay(game.history);
   if (st.winner !== null || st.full) return;
   if (st.turn !== game.humanSide) return;        // 人間の番のみ
   if (st.heights[col] >= 4) return;
   game.history.push(col);
-  game.analysis = null;
+  game.analysis = null; clearMate();
   render();
   requestEngineOrAnalysis();
 }
 function newGame(humanSide) {
   game.history = []; game.humanSide = humanSide; game.analysis = null; game.thinking = false;
+  clearMate();
   game.reqId++;
   render();
   requestEngineOrAnalysis();                      // エンジン先手なら初手を指す
@@ -141,7 +179,7 @@ function undo() {
   if (st.winner === null && !st.full && st.turn !== game.humanSide && game.history.length > 0) {
     game.history.pop();
   }
-  game.analysis = null; game.reqId++;
+  game.analysis = null; clearMate(); game.reqId++;
   render();
   requestEngineOrAnalysis();
 }
@@ -286,12 +324,20 @@ function update3D(st) {
       g.position.set(p[0], p[1], p[2]); highlights.add(g);
     });
   }
+  // 詰み手順 (PV) を半透明の紫マーカーで盤上に重ねる。
+  (st.matePv || []).forEach((i, k) => {
+    const p = ballPos(...decode(i));
+    const g = new THREE.Mesh(new THREE.SphereGeometry(RB * 0.7, 16, 12),
+      new THREE.MeshBasicMaterial({ color: k % 2 === 0 ? 0x7a5cc7 : 0xb39ddb, transparent: true, opacity: 0.5 }));
+    g.position.set(p[0], p[1], p[2]); highlights.add(g);
+  });
 }
 
 /* ====== スライス (2D フォールバック / 併用) ====== */
 function renderSlices(st) {
   const el = $("slices"); el.innerHTML = "";
   const winSet = new Set(st.winCells || []);
+  const mateOrder = new Map((st.matePv || []).map((i, k) => [i, k + 1]));
   for (let z = 0; z < 4; z++) {
     const slice = document.createElement("div"); slice.className = "slice";
     const zlabel = z === 0 ? "段1（底）" : z === 3 ? "段4（上）" : "段" + (z + 1);
@@ -309,8 +355,11 @@ function renderSlices(st) {
         if (winSet.has(ci)) cell.classList.add("win");
         else if (ci === st.lastIdx) cell.classList.add("last");
         else if (game.showThreat && st.threats.has(ci)) cell.classList.add("threat");
-        if (v === 0) cell.innerHTML = '<span class="peg"></span>';
-        else cell.innerHTML = `<span class="bead ${v === 1 ? "p1" : "p2"}${ci === st.lastIdx ? " fresh" : ""}"></span>`;
+        if (v === 0 && mateOrder.has(ci)) cell.classList.add("mate");
+        if (v === 0) {
+          cell.innerHTML = mateOrder.has(ci)
+            ? `<span class="mateno">${mateOrder.get(ci)}</span>` : '<span class="peg"></span>';
+        } else cell.innerHTML = `<span class="bead ${v === 1 ? "p1" : "p2"}${ci === st.lastIdx ? " fresh" : ""}"></span>`;
         row.appendChild(cell);
       }
       slice.appendChild(row);
@@ -331,6 +380,9 @@ function renderDropGrid(st) {
       b.innerHTML = `<span class="dn">${colName(c)}</span><span class="dh">${st.heights[c]}/4</span>`;
       const hint = game.analysis && game.analysis.move === c;
       if (hint) b.classList.add("hint");
+      if (game.mate && (game.mate.status === 1 || game.mate.status === 2) && game.mate.move === c) {
+        b.classList.add("mate");
+      }
       b.disabled = !playable || st.heights[c] >= 4;
       b.addEventListener("click", () => drop(c));
       el.appendChild(b);
@@ -347,9 +399,21 @@ function fmtEval(score, turn) {
   return { txt: `${lead}有利  (${s >= 0 ? "+" : ""}${s})`, cls: s >= 0 ? "p1" : "p2" };
 }
 
+function fmtMate(m) {
+  const side = (t) => t === 0 ? "先手（黒）" : "後手（生成り）";
+  const pv = m.pv.length ? m.pv.map(colName).join(" → ") : "";
+  if (m.status === 1) return { txt: `${side(m.turn)}に ${m.plies}手で詰みあり`, sub: pv, cls: m.turn === 0 ? "p1" : "p2" };
+  if (m.status === 2) return { txt: `${side(m.turn)}は ${m.plies}手で詰まされる`, sub: pv, cls: m.turn === 0 ? "p2" : "p1" };
+  if (m.status === 3) return { txt: "双方最善で引き分け（読み切り）", sub: "", cls: "" };
+  return { txt: `${SOLVE_MAX}手以内に強制詰みなし`, sub: "", cls: "" };
+}
+
 /* ====== メイン描画 ====== */
 function render() {
   const st = replay(game.history);
+  // 詰み探索結果の PV を現局面のセル列に変換 (win/loss のみ; 盤上にハイライト)。
+  st.matePv = (game.mate && (game.mate.status === 1 || game.mate.status === 2) && game.mate.pv.length)
+    ? pvCells(st.heights, game.mate.pv) : [];
 
   if (game.viewMode === "3d") update3D(st);
   else renderSlices(st);
@@ -359,6 +423,7 @@ function render() {
   const statusEl = $("status"), evalEl = $("evalLine"), hintEl = $("hintLine");
   $("counter").textContent = `手 ${game.history.length} / 64`;
   $("btnUndo").disabled = game.history.length === 0 || game.thinking;
+  $("btnSolve").disabled = game.thinking || game.solving || st.winner !== null || st.full;
 
   const sideName = (p) => p === 0 ? "先手（黒）" : "後手（生成り）";
   if (st.winner !== null) {
@@ -384,6 +449,18 @@ function render() {
     } else hintEl.textContent = "";
   } else {
     evalEl.textContent = ""; hintEl.textContent = "";
+  }
+
+  // 詰み探索の表示
+  const mateEl = $("mateLine");
+  if (game.solving) {
+    mateEl.innerHTML = `<span class="thinking">詰み探索中…</span>`;
+  } else if (game.mate) {
+    const f = fmtMate(game.mate);
+    mateEl.innerHTML = `詰み探索: <b class="${f.cls}">${f.txt}</b>` +
+      (f.sub ? `<span class="matePv">${f.sub}</span>` : "");
+  } else {
+    mateEl.textContent = "";
   }
 
   // 手順
@@ -414,6 +491,7 @@ function wire() {
   $("btnNewBlack").addEventListener("click", () => newGame(0));
   $("btnNewWhite").addEventListener("click", () => newGame(1));
   $("btnUndo").addEventListener("click", undo);
+  $("btnSolve").addEventListener("click", requestSolve);
   $("depthSel").addEventListener("change", (e) => { game.depth = parseInt(e.target.value, 10); });
   $("threatToggle").addEventListener("change", (e) => { game.showThreat = e.target.checked; render(); });
   $("view3d").addEventListener("click", () => setView("3d"));

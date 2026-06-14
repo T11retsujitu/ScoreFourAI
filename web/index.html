@@ -9,7 +9,7 @@
     --bg:#f3efe6; --panel:#fbf9f4; --line:#e0d8c8; --ink:#23262b; --muted:#73776f;
     --maple:#d9c3a0; --maple-well:#cdb78f; --maple-grid:#b79a6e;
     --p1:#2b2b30; --p2:#f5ecdc; --p2-ring:#c7b596;
-    --win:#d8920f; --threat:#2f8f83; --last:#3b6ea5; --hint:#2f8f83;
+    --win:#d8920f; --threat:#2f8f83; --last:#3b6ea5; --hint:#2f8f83; --mate:#7a5cc7;
     --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
     --sans:"Helvetica Neue",Arial,"Hiragino Kaku Gothic ProN","Hiragino Sans","Noto Sans JP",sans-serif;
   }
@@ -57,6 +57,8 @@
   .cell.win{box-shadow:inset 0 0 0 2px var(--win);background:#f0d79a}
   .cell.threat{box-shadow:inset 0 0 0 2px var(--threat)}
   .cell.threat .peg{background:var(--threat);opacity:.5}
+  .cell.mate{box-shadow:inset 0 0 0 2px var(--mate)}
+  .mateno{font-family:var(--mono);font-weight:700;font-size:.8rem;color:var(--mate)}
   @keyframes pop{from{transform:scale(.2);opacity:0}to{transform:scale(1);opacity:1}}
   .bead.fresh{animation:pop .16s ease}
 
@@ -68,6 +70,7 @@
   button.drop:hover:not(:disabled){border-color:var(--maple-grid);background:#fffaf0}
   button.drop:disabled{opacity:.4;cursor:default}
   button.drop.hint{border-color:var(--hint);box-shadow:0 0 0 1px var(--hint)}
+  button.drop.mate{border-color:var(--mate);box-shadow:0 0 0 1px var(--mate)}
 
   .info{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
   .status{font-size:.95rem;margin-bottom:8px}
@@ -80,6 +83,9 @@
   .evalLine{font-size:.9rem;margin:2px 0}
   .evalLine b.p1{color:var(--ink)} .evalLine b.p2{color:#8a6f3a}
   .hintLine{font-size:.85rem;color:var(--threat);min-height:1.1em}
+  .mateLine{font-size:.85rem;margin-top:4px;min-height:1.1em}
+  .mateLine b.p1{color:var(--ink)} .mateLine b.p2{color:#8a6f3a}
+  .mateLine .matePv{display:block;font-family:var(--mono);font-size:.74rem;color:var(--mate);margin-top:2px;word-break:break-word}
   .moves{display:flex;flex-wrap:wrap;gap:4px}
   .mv{font-family:var(--mono);font-size:.76rem;padding:2px 6px;border-radius:5px;border:1px solid var(--line)}
   .mv.p1{background:#fff} .mv.p2{background:#f1ead9}
@@ -95,13 +101,15 @@
 <div class="wrap">
   <header>
     <h1>立体4目並べ — エンジンと対局</h1>
-    <p>4×4×4・重力あり（Score Four）。柱を選んで落とすと、Rust製エンジン（WASM）が応手します。</p>
+    <p>4×4×4・重力あり（Score Four）。柱を選んで落とすと、Rust製エンジン（WASM）が応手します。
+       「詰み探索」で現局面の強制詰み（最短手数と詰み手順）を読み切れます。</p>
   </header>
 
   <div class="controls">
     <button class="b" id="btnNewBlack">新規（自分が先手・黒）</button>
     <button class="b" id="btnNewWhite">新規（自分が後手・生成り）</button>
     <button class="b" id="btnUndo">待った</button>
+    <button class="b" id="btnSolve" title="現局面に強制詰みがあるか読み切ります">詰み探索</button>
     <label class="toggle">強さ
       <select id="depthSel" aria-label="エンジンの探索深さ">
         <option value="6">速い (6)</option>
@@ -131,6 +139,7 @@
         <div class="status" id="status"></div>
         <div class="evalLine" id="evalLine"></div>
         <div class="hintLine" id="hintLine"></div>
+        <div class="mateLine" id="mateLine"></div>
       </div>
       <div style="font-size:.78rem;font-weight:700;color:var(--muted);margin-bottom:6px">手順</div>
       <div class="moves" id="moveList"></div>
@@ -140,6 +149,7 @@
         <span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--last)"></i>直前の手</span>
         <span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--win);background:#f0d79a"></i>勝ち筋</span>
         <span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--threat)"></i>脅威</span>
+        <span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--mate)"></i>詰み手順</span>
       </div>
     </div>
   </div>
