@@ -1,9 +1,15 @@
 # 実験計画: 幾何・解放関係評価（Geometric / Relational Evaluation）
 
 > ユーザー仮説に基づく**評価関数の独立実験**の設計・計測・採否計画。元の指示書を現行
-> リポジトリに合わせて再構成したもの。**実装はまだ行わず**、本書をレビュー成果物として残す。
-> 既存ロードマップ（[`../roadmap.md`](../roadmap.md)）の再実装ではなく、新しい評価仮説を
-> **既定オフのオプトイン実験**として加える。実装は本書承認後に Commit 1 から着手する。
+> リポジトリに合わせて再構成したもの。既存ロードマップ（[`../roadmap.md`](../roadmap.md)）の
+> 再実装ではなく、新しい評価仮説を**既定オフのオプトイン実験**として加える。
+
+> **状態（2026-06）: Commit 1〜5 実装・計測済み → 🧪 EXPERIMENTAL（中立・既定オフのまま資産
+> 保持）。** Stage A（占有種類差 occ_* / テンポ playable_*）を Python/Rust に実装し、重み 0 で
+> `default_eval` 完全一致・全契約緑。Stage 1 スクリーニング＋ホールドアウトで robust な正シグナルは
+> 出ず（最良 0.542 で 2SE 未達）、固定時間 / Stage A 拡張 / Stage B には進めていない。計測の全経緯は
+> [`../eval_measurements.md`](../eval_measurements.md) 仮説6 /
+> [`../benchmarks/geometry_eval.md`](../benchmarks/geometry_eval.md)。以下は実装・計測の設計記録。
 
 最重要前提（[`../../CLAUDE.md`](../../CLAUDE.md) の原則と一致）:
 
