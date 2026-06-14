@@ -11,9 +11,6 @@
 
 use crate::board::{line_masks, Board};
 
-/// 占有数 k(=0..3) のライン価値。
-const WEIGHT: [i64; 4] = [0, 1, 5, 25];
-
 /// 検証済みパリティ重み。
 pub const PARITY: i64 = -8;
 
@@ -27,15 +24,18 @@ pub struct EvalConfig {
     pub parity_weight: i64,
     pub immediate: i64,
     pub parity_mode: u8,
+    /// 占有数 1/2/3 の基本ライン価値 (count=0 は常に 0)。既定 [1, 5, 25]。
+    pub weights: [i64; 3],
 }
 
 impl EvalConfig {
-    /// 既定 (検証済み): ALL / weight -8 / 即時脅威なし。
+    /// 既定 (検証済み): ALL / weight -8 / 即時脅威なし / 基本重み 1,5,25。
     pub fn default_config() -> Self {
         EvalConfig {
             parity_weight: PARITY,
             immediate: 0,
             parity_mode: MODE_ALL,
+            weights: [1, 5, 25],
         }
     }
 }
@@ -47,6 +47,12 @@ fn parity_bit(z: u8) -> i64 {
     } else {
         -1
     }
+}
+
+#[inline]
+fn line_weight(cfg: &EvalConfig, count: usize) -> i64 {
+    // count: 1..3 (0 と 4 は呼ばれない)。
+    cfg.weights[count - 1]
 }
 
 /// 設定 cfg に基づく手番側視点の評価。
@@ -73,7 +79,7 @@ pub fn eval_with(board: &Board, cfg: &EvalConfig) -> i64 {
 
         let count = occ.count_ones() as usize;
         let sign: i64 = if player == 0 { 1 } else { -1 };
-        score += sign * WEIGHT[count];
+        score += sign * line_weight(cfg, count);
 
         if count == 3 {
             let e = (mask ^ occ).trailing_zeros() as usize; // 残り1マス
@@ -127,8 +133,7 @@ pub fn line_potential(board: &Board) -> i64 {
         board,
         &EvalConfig {
             parity_weight: 0,
-            immediate: 0,
-            parity_mode: MODE_ALL,
+            ..EvalConfig::default_config()
         },
     )
 }

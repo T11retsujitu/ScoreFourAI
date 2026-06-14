@@ -107,15 +107,31 @@ fn py_eval_default(b0: u64, b1: u64) -> i64 {
     evaluate::default_eval(&Board::from_bitboards(b0, b1))
 }
 
-/// 設定 (parity_weight, immediate, parity_mode) での評価値 (D4不変性テスト用)。
+/// 評価設定タプル (parity_weight, immediate, parity_mode, w1, w2, w3) -> EvalConfig。
+fn cfg_from_tuple(c: (i64, i64, u8, i64, i64, i64)) -> EvalConfig {
+    EvalConfig {
+        parity_weight: c.0,
+        immediate: c.1,
+        parity_mode: c.2,
+        weights: [c.3, c.4, c.5],
+    }
+}
+
+/// 設定での評価値 (D4不変性テスト用)。基本重み w1,w2,w3 は既定 1,5,25。
 #[pyfunction]
-#[pyo3(name = "eval_cfg")]
-fn py_eval_cfg(b0: u64, b1: u64, parity_weight: i64, immediate: i64, parity_mode: u8) -> i64 {
-    let cfg = EvalConfig {
-        parity_weight,
-        immediate,
-        parity_mode,
-    };
+#[pyo3(name = "eval_cfg", signature = (b0, b1, parity_weight, immediate, parity_mode, w1=1, w2=5, w3=25))]
+#[allow(clippy::too_many_arguments)]
+fn py_eval_cfg(
+    b0: u64,
+    b1: u64,
+    parity_weight: i64,
+    immediate: i64,
+    parity_mode: u8,
+    w1: i64,
+    w2: i64,
+    w3: i64,
+) -> i64 {
+    let cfg = cfg_from_tuple((parity_weight, immediate, parity_mode, w1, w2, w3));
     evaluate::eval_with(&Board::from_bitboards(b0, b1), &cfg)
 }
 
@@ -127,9 +143,10 @@ fn py_negamax_value(b0: u64, b1: u64, depth: u8) -> i64 {
 }
 
 /// 反復深化 + 時間制御 + 評価設定で (score, best_move)。
-/// 既定 (parity_weight=-8, immediate=0, parity_mode=0) で Python search と一致。
+/// 既定 (-8, 0, 0, 1, 5, 25) で Python search と一致。
 #[pyfunction]
-#[pyo3(name = "search", signature = (b0, b1, max_depth, time_limit=None, parity_weight=-8, immediate=0, parity_mode=0))]
+#[pyo3(name = "search", signature = (b0, b1, max_depth, time_limit=None, parity_weight=-8, immediate=0, parity_mode=0, w1=1, w2=5, w3=25))]
+#[allow(clippy::too_many_arguments)]
 fn py_search(
     b0: u64,
     b1: u64,
@@ -138,12 +155,11 @@ fn py_search(
     parity_weight: i64,
     immediate: i64,
     parity_mode: u8,
+    w1: i64,
+    w2: i64,
+    w3: i64,
 ) -> (i64, i64) {
-    let cfg = EvalConfig {
-        parity_weight,
-        immediate,
-        parity_mode,
-    };
+    let cfg = cfg_from_tuple((parity_weight, immediate, parity_mode, w1, w2, w3));
     let (score, mv) = search::search_with_cfg(b0, b1, max_depth, time_limit, cfg);
     (score, mv as i64)
 }
@@ -156,26 +172,21 @@ fn py_best_move(b0: u64, b1: u64, max_depth: u8, time_limit: Option<f64>) -> i64
 }
 
 /// 評価 A/B を openings で総当たり対戦させ (a_wins, b_wins, draws) を返す。
-/// cfg は (parity_weight, immediate, parity_mode)。openings は柱番号の列のリスト。
+/// cfg は (parity_weight, immediate, parity_mode, w1, w2, w3)。
 #[pyfunction]
 #[pyo3(name = "play_match")]
 fn py_play_match(
-    cfg_a: (i64, i64, u8),
-    cfg_b: (i64, i64, u8),
+    cfg_a: (i64, i64, u8, i64, i64, i64),
+    cfg_b: (i64, i64, u8, i64, i64, i64),
     openings: Vec<Vec<u8>>,
     depth: u8,
 ) -> (u32, u32, u32) {
-    let a = EvalConfig {
-        parity_weight: cfg_a.0,
-        immediate: cfg_a.1,
-        parity_mode: cfg_a.2,
-    };
-    let b = EvalConfig {
-        parity_weight: cfg_b.0,
-        immediate: cfg_b.1,
-        parity_mode: cfg_b.2,
-    };
-    search::play_match(a, b, &openings, depth)
+    search::play_match(
+        cfg_from_tuple(cfg_a),
+        cfg_from_tuple(cfg_b),
+        &openings,
+        depth,
+    )
 }
 
 #[pymodule]
