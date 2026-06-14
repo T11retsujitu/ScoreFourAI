@@ -140,6 +140,35 @@ impl Board {
         })
     }
 
+    /// 合法な柱を u16 ビットマスクで返す (bit c = 柱 c が着手可能)。ヒープ確保なし。
+    pub fn legal_mask(&self) -> u16 {
+        if self.winner.is_some() {
+            return 0;
+        }
+        let mut m = 0u16;
+        for c in 0..NUM_COLUMNS {
+            if self.heights[c] < N {
+                m |= 1 << c;
+            }
+        }
+        m
+    }
+
+    /// player が今すぐ着手して4を完成できる柱を u16 ビットマスクで返す。
+    pub fn winning_mask(&self, player: usize) -> u16 {
+        if self.winner.is_some() {
+            return 0;
+        }
+        let mut m = 0u16;
+        for c in 0..NUM_COLUMNS {
+            let h = self.heights[c];
+            if h < N && self.completes_line(player, c + (h as usize) * 16) {
+                m |= 1 << c;
+            }
+        }
+        m
+    }
+
     /// 手番のプレイヤーが柱 column に着手する。勝ちを決めた手なら Ok(true)。
     pub fn play(&mut self, column: usize) -> Result<bool, String> {
         if self.winner.is_some() {
