@@ -19,7 +19,7 @@ CPU のみで高速・強力に動く Score Four 解析/対戦エンジンへ向
 | 4 | ホットループ最適化 (u16 mask ✅ / 差分評価 / D4 高速化) | ◑ | 下記（u16 mask: NPS +12〜15%） |
 | 5 | TT 改善 (固定長 / 窓縮小 / aspiration) | ◑ | 下記（aspiration: 計測=悪化→不採用） |
 | 6 | 定石改善 (選択的 Book / リッチエントリ / shared TT) | ⏳ | 下記 |
-| 7 | 詰み探索・問題生成 (df-PN / Threat-Space) | ⏳ | 下記 |
+| 7 | 詰み探索・問題生成 (mate solver / 問題自動生成) | ◑ | `solve.py` / `problems.py` / `scripts/generate_problems.py` |
 | 8 | 軽量学習評価 (深い αβ を教師) | ⏳ | 下記 |
 | 9 | Web アプリ対応 (crate 分離 / WASM API / 難易度) | ◑ | `web/` / `rust/` |
 
@@ -91,11 +91,27 @@ depth==0 の地平線で強制手（即勝ち/唯一の受け/ダブル即勝ち
 bound/pv/nodes/engine_version/generated_at、形式バージョン付き）。生成中は **Engine を
 使い回し TT を共有**（`analyze_batch` / `clear_tt` / `new_generation`）。
 
-## Phase 7 — 詰み探索・問題生成 ⏳
+## Phase 7 — 詰み探索・問題生成 ◑
 
-通常 αβ とは別の**解析モード**として df-PN / Threat-Space Search を追加し、強制勝ちの
-証明・最短手数・3/5/7 手詰めを扱う。詰み問題の自動生成（強制勝ち・指定手数・初手一意・
-全応手で勝ち継続・D4 重複除去・難易度指標）。
+通常 αβ とは別の**解析モード**として詰み探索を追加し、強制勝ちの証明・最短手数・
+3/5/7 手詰めを扱う。詰み問題の自動生成（強制勝ち・指定手数・初手一意・全応手で勝ち
+継続・D4 重複除去・難易度指標）。
+
+- ◑ 済（`solve.py`）: **零評価 (D4 不変) を葉に挿した negamax** を詰み探索モードとして
+  実装。零評価では地平線内の終端 (勝ち/負け/引分) だけが価値として伝播し、終端スコアの
+  「速い勝ち=高／遅い負け=高」により **最善値＝最短強制勝ち／最長粘りの負け** になる。
+  反復深化で最初に詰みを読み切った深さ＝最短詰み手数。`solve()` が status (win/loss/draw/
+  unknown)・最短手数・詰み手順 (PV) を返す。既存の脅威ベース強制手枝刈りが探索木を詰みへ
+  大きく絞る（実質的な Threat-Space 縮約）。**全幅 negamax＋零評価を参照に詰み手数を契約
+  検証**（`test_solve.py`）。零評価 negamax は `test_search.py` で `negamax_full` と全 depth
+  同値が固定済み。
+- ◑ 済（`problems.py` / `scripts/generate_problems.py`）: ランダムプレイアウトで非終端局面を
+  サンプリングし、**初手一意の強制勝ち（指定手数）**を収集。D4 正規化キーで重複除去、難易度
+  指標（詰み手数×100＋おとり数）を付与。`verify_problem` が独立再探索で「初手一意・全応手で
+  勝ち継続」を再検証。保存/読込 (`save_problems`/`load_problems`)。
+- ⏳ 予定: **df-PN（depth-first proof-number）への置換**で深い戦術詰みを高速化（計測で効果を
+  確認してから採用）。Rust への移植（ホットループが律速になったら）。WASM API への `solve`
+  公開（Phase 9）。
 
 ## Phase 8 — 軽量学習評価 ⏳
 
