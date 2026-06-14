@@ -314,6 +314,42 @@ def test_both_into_same_file_equals_selective_both(tmp_path: Path) -> None:
     assert both == generate_selective(owner="both", **kw)
 
 
+def test_profile_single_segment_equals_scalar(tmp_path: Path) -> None:
+    """全 ply を覆う 1 区間の profile は scalar 指定と一致 (サニティ)。"""
+    a = generate_book_resumable(
+        tmp_path / "a.json", max_plies=3, depth=6, owner=0, ai_width=1, opp_width=2
+    )
+    b = generate_book_resumable(
+        tmp_path / "b.json", max_plies=3, depth=6, owner=0, profile=[(3, 6, 1, 2)]
+    )
+    assert a == b
+
+
+def test_profile_phase_connect_on_extend(tmp_path: Path) -> None:
+    """早い区間を変えずに深い区間を足して延長すると、一括生成と一致し早い手数は再利用される。"""
+    out = tmp_path / "book.json"
+    early = [(3, 6, 1, 2)]               # 0-3手: depth6/相手2手
+    full = [(3, 6, 1, 2), (5, 4, 1, 1)]  # +4-5手: depth4/相手1手 (浅く狭く)
+    small = dict(generate_book_resumable(out, max_plies=3, depth=6, owner=0, profile=early))
+    big = generate_book_resumable(out, max_plies=5, depth=6, owner=0, profile=full)
+    # 一括生成 (profile=full) と一致 = 異なるパラメータでも接続する。
+    fresh = generate_book_resumable(tmp_path / "fresh.json", max_plies=5, depth=6, owner=0, profile=full)
+    assert big == fresh
+    # 早い手数 (0-3, depth6) のエントリはそのまま保持される。
+    assert all(big[k] == small[k] for k in small)
+
+
+def test_cutoff_truncates_decided_lines(tmp_path: Path) -> None:
+    """cutoff で評価が ±N 以上の変化を打ち切ると book が小さくなる。巨大 cutoff は無効化と同じ。"""
+    kw = dict(max_plies=4, depth=6, owner=0, ai_width=1, opp_width=2)
+    full = generate_book_resumable(tmp_path / "full.json", **kw)
+    huge = generate_book_resumable(tmp_path / "huge.json", cutoff=10**9, **kw)
+    assert huge == full  # 決して発火しない cutoff は無指定と同じ
+    cut = generate_book_resumable(tmp_path / "cut.json", cutoff=1, **kw)
+    assert set(cut).issubset(set(full))  # 打ち切りで訪れる局面は減る
+    assert len(cut) < len(full)
+
+
 def test_expansion_collapses_forced_block() -> None:
     """即詰めの受けが強制な局面は opp_width>1 でも受け1本だけ展開する。"""
     from score_four.book import _children_to_expand

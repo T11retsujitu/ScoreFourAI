@@ -78,34 +78,51 @@ python -m pytest -q               # pytest は src を自動で読む（PYTHONPA
 $env:PYTHONPATH = "src"            # cmd の場合: set PYTHONPATH=src
 ```
 
-### 使い方
+### 使い方（フラグ式）
 
 ```
-python scripts\generate_book.py [max_plies] [depth] [out_path] [owner] [opp_width] [ai_width]
+python scripts\generate_book.py [out] --plies N --depth D --owner both --opp-width W [...]
 ```
 
-| 引数 | 既定 | 意味 |
-|------|------|------|
-| `max_plies` | 6 | 定石を作る手数（root からの ply 数）。大きいほど深く広い |
-| `depth` | 10 | 各局面の探索深さ。大きいほど手が強いが遅い |
-| `out_path` | `data\opening_book.json` | 出力ファイル |
-| `owner` | `both` | `0`=先手 / `1`=後手 / `both`=両側生成して統合（Web でどちらも持てる） |
-| `opp_width` | 4 | **相手手番**で展開する上位手数（大きいほど網羅的・ファイル大） |
-| `ai_width` | 1 | **自分手番**で展開する上位手数（1=最善のみ＝principal） |
+| フラグ | 既定 | 意味 |
+|--------|------|------|
+| `out`（位置引数） | `data\opening_book.json` | 出力ファイル |
+| `--plies` | 6 | 定石を作る手数（`--profile` 指定時は無視） |
+| `--depth` | 10 | 各局面の探索深さ（`--profile` 指定時は無視） |
+| `--owner` | both | `0`=先手 / `1`=後手 / `both`=両側生成して統合 |
+| `--opp-width` | 4 | **相手手番**で展開する上位手数（robust。大きいほど網羅的） |
+| `--ai-width` | 1 | **自分手番**で展開する上位手数（1=最善のみ） |
+| `--profile` | なし | **フェーズ別**パラメータ（後述）。`until:depth:ai:opp` をカンマ区切り |
+| `--cutoff` | なし | 局面の評価が **±N 以上**なら決着が見えたとみなしその変化を打ち切る |
+| `--time-ms` | 0 | `>0` で固定時間/手（既定 0=固定深さ） |
+
+> 注: **強制手（即詰めの受け・ダブルリーチ阻止・合法手1つ）は `opp_width` に関わらず 1 本に
+> 畳まれ**、負けが読み切れた手は展開されない。なので `opp_width` は「本当に選択肢がある所」での
+> 枝数。
 
 ### まず小さく試す（速度の目安を掴む）
 
 ```powershell
-python scripts\generate_book.py 6 10 data\opening_book.json both 4 1
+python scripts\generate_book.py data\opening_book.json --plies 6 --depth 10 --opp-width 4 --owner both
 ```
-ply ごとに `ply3: 18 entries (5s)` のように進捗が出る。これで所要時間の見当をつけてから
-`max_plies` / `depth` / `opp_width` を上げる。
+ply ごとに `ply3: 18 entries (5s)` のように進捗が出る。所要時間の見当をつけてから手数や幅を上げる。
 
-### 本生成の例（深め・網羅広め）
+### フェーズ別に読む（序盤=広く浅く / 中盤=深く広く / 終盤=狭く深く）
+
+序盤は手が広いので深く・多くは読めない、終盤は手が狭いので深く読める。`--profile` で
+**手数ごとに `depth` と幅を変える**:
 
 ```powershell
-python scripts\generate_book.py 10 12 data\opening_book.json both 6 1
+# 0-8手: depth10/相手6手(広く浅く) / 9-16手: depth14/相手4手(深く広く) / 17-30手: depth18/相手2手(狭く深く)
+python scripts\generate_book.py data\opening_book.json --profile 8:10:1:6,16:14:1:4,30:18:1:2 --owner both --cutoff 400
 ```
+各区間は `until_ply:depth:ai_width:opp_width`。最大手数は profile の最後の `until_ply`。
+
+### 評価打ち切り（`--cutoff`）
+
+`--cutoff 400` のように指定すると、ある局面の評価値が **±400 以上**（＝決着が見えた）になった
+変化はそこで**打ち切って記録**し、それ以上展開しない。決着済みの深掘りを避けて book を締める
+（その先はエンジンが指せる）。厳密な読み切りではなく評価値ベースの早期打ち切り。
 
 ### 途中保存・再開（このガイドの肝）
 
@@ -116,23 +133,30 @@ python scripts\generate_book.py 10 12 data\opening_book.json both 6 1
 - **同じコマンドをもう一度実行すると、保存済みの局面を再利用して続きから生成する。**
 - 長時間回すときは、Windows の電源設定でスリープ/休止を無効化し、ターミナルを閉じないこと。
 
-### 追加編集・延長（「14手目まで→15手目へ」はここ）
+### 追加編集・延長（「10手目まで作った後に 11手目以降を別パラメータで足す」はここ）
 
-- **手数を伸ばす（plies 延長）**: 完走した book に対し、**同じ `depth`・同じ `owner`/幅で
-  `max_plies` だけ増やして同じ `out_path` に再実行**する。既存の手数のエントリは**再探索せず
-  再利用**し、増やした手数ぶんだけ探索する。例（14→15 手）:
+完走した book へ追記するときも**同じ `out` に再実行**するだけ。既存エントリは再利用される。
+
+- **手数を伸ばす（同パラメータ）**: `--plies` を増やして再実行。既存手数は**再探索せず再利用**、
+  増えた手数だけ探索する（進捗は既存 ply が一瞬で流れる）。
+- **フェーズ別に接続して延長（推奨）**: profile の**早い区間を据え置き、後ろに深い手数の区間を
+  足して**再実行する。早い手数は同 `depth` なので再利用され、**異なる depth/幅でも接続**する:
   ```powershell
-  python scripts\generate_book.py 14 12 data\opening_book.json both 6 1   # 1回目
-  python scripts\generate_book.py 15 12 data\opening_book.json both 6 1   # 15手へ延長(再利用)
+  # 1回目: 10手まで (depth12/相手6手)
+  python scripts\generate_book.py data\opening_book.json --profile 10:12:1:6 --owner both
+  # 2回目: 11-20手を狭く深く(depth16/相手3手)で追加。早い区間 10:12:1:6 は据え置く
+  python scripts\generate_book.py data\opening_book.json --profile 10:12:1:6,20:16:1:3 --owner both
   ```
-  進捗は ply0..14 が一瞬で流れ（再利用）、ply15 だけ実探索される。
-- **網羅を広げる（`opp_width` 増）**: `opp_width` を上げて同じファイルに再実行すると、
-  新しく増えた相手手の枝を追加探索する（既存枝は再利用）。
-- **手を深くする（`depth` 増）**: `depth` を上げると浅い既存エントリを深く探索し直す。ただし
-  最善手・順位が変わると選択的木の形も変わるため、**古い木にしか無い局面は古い depth のまま
-  残る**（book は深い木を包含する superset になる）。完全にクリーンな作り直しが要るときは
-  **別ファイルへ生成**する。
+  2回目は ply0..10 が再利用（一瞬）、ply11..20 だけ実探索される。
+- **網羅を広げる**: `--opp-width`（または profile の `opp` 値）を上げて再実行すると、新たに増えた
+  相手手の枝を追加探索する（既存枝は再利用）。
+- **手を深くする（`depth` 増）**: 浅い既存エントリを深く探索し直す。ただし最善手・順位が変わると
+  選択的木の形も変わり、**古い木にしか無い局面は古い depth のまま残る**（book は superset に）。
+  完全にクリーンな作り直しが要るときは**別ファイルへ生成**する。
 - 既存の別ファイルと統合したいときは Python から `merge_book(a, b)`（深い `depth` 優先）。
+
+> **接続のコツ**: 早い手数の区間（`depth`・幅）を変えない限り、後ろの手数を別パラメータで何度
+> 足しても整合する。早い区間を変えると木の形が変わり古いエントリが残る（無害だが superset）。
 
 ---
 

@@ -107,8 +107,11 @@ Web アプリへ載せ、book を正とした自己学習の土台にする（[`
     未探索だけを探索して周期的に原子保存。これで (a) 中断後の再開、(b) **max_plies を増やしての
     追加延長（同 depth は既存を再利用、例 14→15 手）**、(c) depth 増での深さ更新、がすべて同じ
     呼び出しで成立。完走 book は `generate_selective(owner)` と一致（延長・クラッシュ再開テスト済み）。
-    `scripts/generate_book.py` は owner 0/1/both（both は同ファイルへ 2 パス）・幅指定・再開・延長に対応。
-    Windows ガイド: [`opening_book_windows.md`](opening_book_windows.md)。
+    さらに **フェーズ別パラメータ `profile`**（ply 区間ごとに depth/ai_width/opp_width を変える＝
+    序盤は広く浅く・中盤は深く広く・終盤は狭く深く。早い区間を据え置けば**異なるパラメータの後続
+    手数を接続して延長**できる）と **評価打ち切り `cutoff`**（|eval|≥N の決着済み変化を展開せず記録）
+    に対応。`scripts/generate_book.py`（argparse）は owner 0/1/both・幅・`--profile`・`--cutoff`・
+    再開・延長に対応。Windows ガイド: [`opening_book_windows.md`](opening_book_windows.md)。
 - ⏳ 予定: **Web アプリへの book ロード**（コンパクト web book の書き出し＋JS の D4 照会 or
   `sf_book_lookup`）、**book を正とした自己学習**（局面→最善手を policy 的に学ぶ。Phase 8 の
   教訓に従い score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）

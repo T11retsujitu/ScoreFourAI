@@ -206,9 +206,27 @@ def generate_selective(
 
 CKPT_FORMAT = "score-four-book-ckpt/1"
 
+# フェーズ別パラメータ: (この ply まで, depth, ai_width, opp_width) の区間リスト。
+# 例 [(8,10,1,6),(16,14,1,4),(30,18,1,2)] = 序盤 0-8 は depth10/相手6手、中盤 9-16 は
+# depth14/4手、終盤 17-30 は depth18/2手。区間は until_ply 昇順。
+Profile = list[tuple[int, int, int, int]]
+
 
 def _ckpt_path(out_path: Path) -> Path:
     return out_path.with_name(out_path.name + ".ckpt.json")
+
+
+def _params_at(
+    profile: Profile | None, ply: int, defaults: tuple[int, int, int]
+) -> tuple[int, int, int]:
+    """ply の (depth, ai_width, opp_width) を返す。profile が None なら defaults。"""
+    if profile is None:
+        return defaults
+    for until, d, aw, ow in profile:
+        if ply <= until:
+            return (d, aw, ow)
+    last = profile[-1]
+    return (last[1], last[2], last[3])  # 最終区間を超えた ply は最終区間を使う
 
 
 def generate_book_resumable(
@@ -221,49 +239,56 @@ def generate_book_resumable(
     time_limit: float | None = None,
     checkpoint_every: int = 200,
     on_progress: "Callable[[int, int], None] | None" = None,
+    profile: Profile | None = None,
+    cutoff: int | None = None,
 ) -> Book:
-    """**途中保存・再開・追加延長**できる選択的定石生成 (owner は 0 か 1 の単一側)。
+    """**途中保存・再開・追加延長・フェーズ別**の選択的定石生成 (owner は 0 か 1)。
 
     **book ファイル自体がチェックポイント**。out_path を読み込み、root から max_plies まで
-    D4 正規化で再列挙しながら、**既に depth 以上で探索済みの局面は再探索せず再利用**し、
-    未探索・浅い局面だけを探索する。checkpoint_every 局ごと＋各 ply 境界で原子保存。
+    D4 正規化で再列挙しながら、**既に十分な depth で探索済みの局面は再利用**し、未探索・浅い
+    局面だけを探索する。checkpoint_every 局ごと＋各 ply 境界で原子保存。
 
-    これにより 1 つの呼び出しで次がすべて成り立つ:
-      - **中断後の再開**: 同じ引数で再実行すると、途中保存された book から続きを生成。
-      - **追加延長**: 完走した book に対し **max_plies を増やして再実行**すると、既存エントリを
-        再利用して新しい手数ぶんだけ探索する (14手目まで→15手目へ等)。
-      - **深さ更新**: depth を増やすと、浅い既存エントリだけ深く探索し直す (品質単調)。
+    1 つの呼び出しで次がすべて成り立つ:
+      - **中断後の再開**: 同じ引数で再実行すると途中保存された book から続きを生成。
+      - **追加延長**: max_plies を増やして再実行すると既存を再利用し新しい手数だけ探索。
+      - **フェーズ別パラメータ (`profile`)**: ply ごとに (depth, ai_width, opp_width) を変えられる
+        (序盤=広く浅く / 中盤=深く広く / 終盤=狭く深く)。**早い手数の区間を変えなければ、後から
+        深い手数を別パラメータで追加しても接続する** (早い手数は同 depth なので再利用される)。
+      - **評価打ち切り (`cutoff`)**: 局面の評価値の絶対値が `cutoff` 以上なら勝敗が見えたとみなし
+        **その変化を展開せず打ち切る** (記録はする)。決着済みの深掘りを避け book を締める。
 
-    完走 book は in-memory の ``generate_selective(..., owner)`` と一致 (同 depth・決定的)。
-    owner="both" の book は owner=0 と owner=1 を **同じ out_path** へ順に生成すればよい
-    (共有局面は再利用され、和集合が得られる)。Windows CPU での長時間生成・追加延長向け。
+    完走 book は in-memory の ``generate_selective(..., owner)`` と一致 (同 depth・cutoff なし)。
+    owner="both" は owner=0/1 を **同じ out_path** へ順に生成 (共有局面再利用で和集合)。
     """
     out_path = Path(out_path)
     book: Book = load_book(out_path) if out_path.exists() else {}
     seen: set[int] = {canonical(0, 0)[0]}
     frontier: list[Board] = [Board()]
     since = 0
+    defaults = (depth, ai_width, opp_width)
 
     for ply in range(max_plies + 1):
+        d, aw, ow = _params_at(profile, ply, defaults)
         next_frontier: list[Board] = []
         for board in frontier:
             if board.is_terminal():
                 continue
             key, t = canonical(board.bb[0], board.bb[1])
             cur = book.get(key)
-            if cur is not None and cur[2] >= depth:
-                best = INV_COL_PERMS[t][cur[0]]  # 十分な深さの既存エントリを再利用
+            if cur is not None and cur[2] >= d:
+                best, score = INV_COL_PERMS[t][cur[0]], cur[1]  # 十分な深さの既存を再利用
             else:
-                score, mv = _engine_search(board, depth, time_limit)
-                book[key] = (COL_PERMS[t][mv], score, depth, ply)
-                best = mv
+                score, best = _engine_search(board, d, time_limit)
+                book[key] = (COL_PERMS[t][best], score, d, ply)
                 since += 1
                 if since >= checkpoint_every:
                     save_book(book, out_path)
                     since = 0
+            if cutoff is not None and abs(score) >= cutoff:
+                continue  # 評価が ±cutoff 以上 = 決着が見えた → この変化は打ち切り
             if ply < max_plies:
-                width = ai_width if board.turn == owner else opp_width
-                for col in _children_to_expand(board, best, width, depth, time_limit):
+                width = aw if board.turn == owner else ow
+                for col in _children_to_expand(board, best, width, d, time_limit):
                     child = board.copy()
                     child.play(col)
                     ckey = canonical(child.bb[0], child.bb[1])[0]
