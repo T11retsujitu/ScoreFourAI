@@ -123,9 +123,10 @@ impl Searcher {
         }
     }
 
-    /// killer/history を使った着手順序 (Python _ordered_moves と同一スコア)。
-    /// history が空の初回は中央寄り順に一致する。
-    fn ordered_moves_ki(&self, board: &Board, tt_move: i32, depth: u8) -> Vec<u8> {
+    /// killer/history を使った着手順序を、スタック配列 ([u8;16], 個数) で返す。
+    /// Python _ordered_moves と同一スコア。history が空の初回は中央寄り順に一致。
+    /// ヒープ確保を避けるため u16 マスクから固定長配列へ展開してソートする。
+    fn ordered_moves_ki(&self, board: &Board, tt_move: i32, depth: u8) -> ([u8; 16], usize) {
         let kd = self.killers[depth as usize];
         let hp = &self.history[board.turn as usize];
         let rank = column_rank();
@@ -142,9 +143,17 @@ impl Searcher {
             }
             hp[c as usize] * ORD_HIST_MULT + (15 - rank[c as usize] as i64)
         };
-        let mut moves = board.legal_moves();
-        moves.sort_by_key(|&c| (-score(c), c)); // -score 昇順 = score 降順, 同点は柱昇順
-        moves
+        let mut buf = [0u8; 16];
+        let mut n = 0usize;
+        let mut m = board.legal_mask();
+        while m != 0 {
+            let c = m.trailing_zeros() as u8;
+            buf[n] = c;
+            n += 1;
+            m &= m - 1;
+        }
+        buf[..n].sort_by_key(|&c| (-score(c), c)); // -score 昇順 = score 降順, 同点は柱昇順
+        (buf, n)
     }
 
     /// beta cutoff を起こした手 col で killer/history を更新する。
@@ -288,25 +297,26 @@ impl Searcher {
         // 相手の即勝ち脅威による強制手 (depth>=2 のときだけ健全)。
         let mut forced: Option<u8> = None;
         if depth >= 2 {
-            let threats = board.winning_moves(me ^ 1);
-            if threats.len() >= 2 {
+            let tmask = board.winning_mask(me ^ 1);
+            let tcount = tmask.count_ones();
+            if tcount >= 2 {
                 return Ok(-(WIN - (board.num_moves() as i64 + 2)));
             }
-            if threats.len() == 1 {
-                forced = Some(threats[0]);
+            if tcount == 1 {
+                forced = Some(tmask.trailing_zeros() as u8); // 最小柱 = winning_moves[0] と一致
             }
         }
 
         let is_forced = forced.is_some();
-        let moves: Vec<u8> = match forced {
-            Some(c) => vec![c],
+        let (moves, nmoves) = match forced {
+            Some(c) => ([c; 16], 1),
             None => self.ordered_moves_ki(board, tt_move, depth),
         };
 
         let mut best = -INF;
         let mut best_move: i32 = -1;
         let mut first = true;
-        for col in moves {
+        for &col in &moves[..nmoves] {
             board.play(col as usize).unwrap();
             // PVS: 第1手は全幅、以降はヌルウィンドウ scout、超えたら全幅再探索。
             // undo を必ず通すため ? は undo 後に適用する。
@@ -379,8 +389,9 @@ impl Searcher {
             }
         }
 
+        let (moves, nmoves) = self.ordered_moves_ki(board, tt_move, depth);
         let mut first = true;
-        for col in self.ordered_moves_ki(board, tt_move, depth) {
+        for &col in &moves[..nmoves] {
             board.play(col as usize).unwrap();
             let result: Result<i64, Timeout> = if first {
                 self.negamax(board, depth - 1, -INF, -alpha).map(|s| -s)

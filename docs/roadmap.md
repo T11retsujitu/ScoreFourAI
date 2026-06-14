@@ -16,8 +16,8 @@ CPU のみで高速・強力に動く Score Four 解析/対戦エンジンへ向
 | 1 | 計測基盤 (analyze + 統計 + PV, 固定時間ベンチ) | ✅ | `search.analyze` / `scripts/benchmark.py` / `benchmarks/baseline.json` |
 | 2 | Threat Quiescence + ダブルリーチ直接検出 | 🧪 | [`benchmarks/quiescence.md`](benchmarks/quiescence.md)（計測=中立→既定オフ） |
 | 3 | 着手順序強化 (killer / history) | ✅ | 下記（ノード −37〜50% / 同一時間で深さ +6〜10） |
-| 4 | ホットループ最適化 (u16 mask / 差分評価 / D4 高速化) | ⏳ | 下記 |
-| 5 | TT 改善 (固定長 / 窓縮小 / aspiration) | ⏳ | 下記 |
+| 4 | ホットループ最適化 (u16 mask ✅ / 差分評価 / D4 高速化) | ◑ | 下記（u16 mask: NPS +12〜15%） |
+| 5 | TT 改善 (固定長 / 窓縮小 / aspiration) | ◑ | 下記（aspiration: 計測=悪化→不採用） |
 | 6 | 定石改善 (選択的 Book / リッチエントリ / shared TT) | ⏳ | 下記 |
 | 7 | 詰み探索・問題生成 (df-PN / Threat-Space) | ⏳ | 下記 |
 | 8 | 軽量学習評価 (深い αβ を教師) | ⏳ | 下記 |
@@ -55,27 +55,34 @@ depth==0 の地平線で強制手（即勝ち/唯一の受け/ダブル即勝ち
 （rs==py 90/90）・**同一深さでノード −37〜50%**（depth8/9/10）・**同一時間で完了深さ合計
 +6〜+10**（50/100/300/1000ms）。序盤/中盤/終盤で確認、棚上げ無しで採用（既定オン）。
 
-## Phase 4 — ホットループ最適化 ⏳
+## Phase 4 — ホットループ最適化 ◑
 
 1ノード当たりコストの削減。**必ずベンチで効果を確認し、複雑性に見合わなければ不採用**。
 
-- **u16 move mask**: 合法手・即勝ち手を `u16` で表現（`count_ones`/`trailing_zeros`）。
-  ヒープ確保削減。既存 `Vec<u8>` API は互換のため残す。
+- ✅ **u16 move mask**: `Board::legal_mask`/`winning_mask`（`count_ones`/`trailing_zeros`）を
+  追加し、探索ホットパスの `Vec` 確保をスタック配列 `[u8;16]` + マスクへ置換（Rust 内部のみ・
+  結果不変）。**NPS +12〜15%**（depth9/10）、ノード数・契約は不変（rs==py）。既存 `Vec<u8>`
+  API は互換のため残す。
 - **差分評価**: 葉での 76 ライン走査を、着手で変化するラインのみの増分更新へ。
   パリティ含め既存評価と完全一致を契約テストで担保。
 - **D4 正規形の高速化**: 8 対称ビットボードを盤に持ち play/undo で差分更新する案。
   盤コピーが多い場合は逆効果になりうるので NPS・メモリで判断。
 
-## Phase 5 — Transposition Table 改善 ⏳
+## Phase 5 — Transposition Table 改善 ◑
 
 現状 `HashMap<u128, TtEntry>`（決定的ハッシャ）。Web/WASM 向けに予測可能なメモリへ。
 
-- **固定長/クラスタ TT**: `key_lock + value + depth + flag + best_move + generation`。
+- 🧪 **Aspiration Window**（計測=悪化につき不採用）: 前回スコア中心の狭窓（delta=16〜1024、
+  外れたら片側全開で再探索）を Python+Rust に実装し契約は維持（rs==py 84/84）したが、
+  **同一深さでノード +24〜36%**（depth9/10/11）と悪化したため**採用せず（既定オフ＝未実装に
+  戻した）**。本エンジンの評価は粗く反復間でスコアが ±delta 以上に揺れるため、狭窓が頻繁に
+  外れ再探索コストが勝った。より滑らかな評価（Phase 8 学習評価）が入れば再評価の余地。
+- ⏳ **固定長/クラスタ TT**: `key_lock + value + depth + flag + best_move + generation`。
   プロファイル: browser 16/32/64MB, server 128MB+。置換は 深さ優先→世代→浅い→EXACT 優先。
-- **TT 境界で窓縮小**: depth 十分時に EXACT は return、LOWER は alpha↑、UPPER は beta↓
-  （fail-soft 維持）。
-- **Aspiration Window**: 前回スコア中心の狭窓（delta=16、外れたら倍々再探索、MATE 近傍は
-  フルウィンドウ）。
+  **注意**: 容量制限で eviction が入ると Python 参照(無制限 dict)と best_move がずれ契約に
+  影響する。Python 側も同一容量・同一 eviction にするか、契約の見直しが必要。
+- ⏳ **TT 境界で窓縮小**: depth 十分時に EXACT は return、LOWER は alpha↑、UPPER は beta↓
+  （fail-soft 維持）。best_move のタイ挙動が変わるため Python+Rust 同時実装で契約維持。
 
 ## Phase 6 — Opening Book 改善 ⏳
 
