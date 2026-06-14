@@ -133,7 +133,9 @@ def test_all_evaluations_are_symmetry_invariant() -> None:
     """
     from score_four.evaluate import (
         default_eval,
+        eval_default_plus_geometric,
         features,
+        geometric_features,
         learned_eval,
         parity_eval,
         threat_eval,
@@ -146,6 +148,8 @@ def test_all_evaluations_are_symmetry_invariant() -> None:
         lambda b: parity_eval(b, parity_weight=7),  # 非ゼロ重みでも不変
         lambda b: tuple(features(b)),  # 全特徴量が D4 不変 (Phase 8 学習評価の前提)
         lambda b: learned_eval(b, [3, -2, 7, -8, 4, 1]),  # 学習評価 (任意重み) も D4 不変
+        lambda b: tuple(geometric_features(b)),  # 幾何特徴 8 次元も D4 不変 (Phase 10)
+        lambda b: eval_default_plus_geometric(b, [2, -1, 3, -4, 5, -2, 6, -3]),  # default+geo
     ]
     rng = random.Random(20)
     for _ in range(60):

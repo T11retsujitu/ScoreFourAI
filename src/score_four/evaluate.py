@@ -267,3 +267,51 @@ def column_class(col: int) -> int:
 
 # 16 柱のクラス（角柱4 / 辺柱8 / 中央柱4）。
 COLUMN_CLASS: tuple[int, ...] = tuple(column_class(c) for c in range(16))
+
+
+# ---------------------------------------------------------------------------
+# Stage A 幾何・解放特徴 (Phase 10 実験・Commit 2)。**既定評価には未統合**（オプトイン）。
+# GEO_NF=8、すべて手番側視点。占有種類差 occ_* は (手番側 - 相手) で side-to-move 視点に
+# 揃え、着手可能種類 playable_* は手番側の機会としてそのまま数える。これにより 1 回の内積で
+# 評価でき、相手へ価値の高いセルを解放する手は negamax の符号反転で自然にペナルティ化する。
+# D4 不変（CELL_TYPE は D4 不変、占有・高さは柱と共に写り種類を保つ、手番も不変）。
+# ---------------------------------------------------------------------------
+
+GEO_NF = 8
+
+
+def geometric_features(board: Board) -> list[int]:
+    """手番側視点の幾何・解放特徴 8 次元を返す（純粋・D4 不変）。Rust と一致（Commit 3）。
+
+    並び:
+        [0..3] occ_{corner,edge,face,interior}   = (手番側占有数) - (相手占有数)
+        [4..7] play_{corner,edge,face,interior}  = 手番側が今着手で落とせるセルの種類別数
+
+    occ は既存ライン評価と相関しうる診断特徴、play が本仮説の主眼（テンポ）。終端で
+    legal_moves が空なら play_* は 0。盤面は変更しない。
+    """
+    me = board.turn
+    opp = me ^ 1
+    f = [0] * GEO_NF
+    bb_me, bb_opp = board.bb[me], board.bb[opp]
+    for t in range(4):
+        mask = CELL_TYPE_MASKS[t]
+        f[t] = (bb_me & mask).bit_count() - (bb_opp & mask).bit_count()
+    for col in board.legal_moves():
+        landing = col + board.heights[col] * 16  # その柱の現在の着地セル
+        f[4 + CELL_TYPE[landing]] += 1
+    return f
+
+
+def eval_geometric(board: Board, weights: list[int]) -> int:
+    """幾何重み weights による手番側視点の加点（整数内積）。weights は長さ GEO_NF。"""
+    return sum(w * x for w, x in zip(weights, geometric_features(board), strict=True))
+
+
+def eval_default_plus_geometric(board: Board, weights: list[int]) -> int:
+    """候補評価 = default_eval + 幾何加点（手番側視点）。
+
+    weights がすべて 0 のとき default_eval と完全一致する（採否判定の基準点）。
+    幾何成分は手番側視点なので default_eval と同じ向きで素直に加算できる。
+    """
+    return default_eval(board) + eval_geometric(board, weights)

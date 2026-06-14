@@ -149,3 +149,35 @@ def test_learned_eval_reproduces_default() -> None:
         if board.is_terminal():
             continue
         assert learned_eval(board, [1, 5, 25, -8, 0, 0]) == default_eval(board)
+
+
+def test_geometric_features_pure_and_sized() -> None:
+    """Phase 10: geometric_features は純粋・長さ GEO_NF・整数。空盤は決まった play 分布。"""
+    from score_four.evaluate import GEO_NF, geometric_features
+
+    board = _play([5, 6, 9, 10, 5])
+    snap = (board.bb[0], board.bb[1])
+    f = geometric_features(board)
+    assert len(f) == GEO_NF
+    assert all(isinstance(x, int) for x in f)
+    assert (board.bb[0], board.bb[1]) == snap  # 非破壊
+    # 空盤: 占有差は全 0、着地は z=0 層 → 角4/辺8/面4/中心0。
+    assert geometric_features(Board()) == [0, 0, 0, 0, 4, 8, 4, 0]
+
+
+def test_eval_default_plus_geometric_zero_weights_is_default() -> None:
+    """Phase 10: 幾何重みすべて 0 のとき candidate == default_eval（採否判定の基準点）。"""
+    import random
+
+    from score_four.evaluate import GEO_NF, eval_default_plus_geometric
+
+    rng = random.Random(11)
+    for _ in range(60):
+        board = Board()
+        for _ in range(rng.randint(1, 32)):
+            if board.is_terminal():
+                break
+            board.play(rng.choice(board.legal_moves()))
+        if board.is_terminal():
+            continue
+        assert eval_default_plus_geometric(board, [0] * GEO_NF) == default_eval(board)
