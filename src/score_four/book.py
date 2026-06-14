@@ -98,6 +98,99 @@ def generate_book(
     return book
 
 
+def _rank_children(board: Board, depth: int, time_limit: float | None) -> list[int]:
+    """board の合法手を「手番側にとって良い順」に並べて返す (決定的)。
+
+    各子局面を depth-1 で探索し、手番側視点 (-子の手番側スコア) で降順ソート。即勝ちは
+    最上位、引分は中庸。選択的生成で「相手手番の上位数手」を選ぶために使う。
+    """
+    from .search import WIN
+
+    scored: list[tuple[int, int]] = []
+    for col in board.legal_moves():
+        child = board.copy()
+        won = child.play(col)
+        if won:
+            cs = WIN  # 即勝ち = 手番側に最善
+        elif child.is_terminal():
+            cs = 0  # 引分
+        else:
+            s, _ = _engine_search(child, max(1, depth - 1), time_limit)
+            cs = -s  # 親 (手番側) 視点
+        scored.append((cs, col))
+    scored.sort(key=lambda x: (-x[0], x[1]))  # スコア降順、同点は柱昇順 (決定的)
+    return [c for _, c in scored]
+
+
+def _children_to_expand(
+    board: Board, best: int, width: int, depth: int, time_limit: float | None
+) -> list[int]:
+    """手番側視点で展開する子柱を最大 width 個返す (best は必ず含む)。"""
+    legal = board.legal_moves()
+    if width >= len(legal):
+        return legal  # exhaustive
+    if width <= 1:
+        return [best]  # principal (最善のみ)
+    ranked = _rank_children(board, depth, time_limit)
+    top = ranked[:width]
+    if best not in top:  # 最善を必ず含める (ランキングは depth-1 近似なので保険)
+        top = [best, *ranked[: width - 1]]
+    return top
+
+
+def generate_selective(
+    max_plies: int,
+    depth: int,
+    owner: int | str = "both",
+    ai_width: int = 1,
+    opp_width: int = 2,
+    time_limit: float | None = None,
+    on_ply: "Callable[[int, int, int], None] | None" = None,
+) -> Book:
+    """**選択的** 定石を D4 正規化で生成する (全列挙より木を絞る)。
+
+    各局面で固定深さ探索の最善手を保存しつつ、展開する子は手番で絞る:
+      - **自分 (owner) の手番**: 上位 ``ai_width`` 手だけ展開 (既定 1 = principal)。
+      - **相手の手番**: 上位 ``opp_width`` 手を展開 (既定 2 = robust。大きいほど exhaustive)。
+    ``owner`` は book を使う側 (0=先手 / 1=後手 / "both"=両側ぶんを生成して merge)。Web で
+    エンジンがどちらを持っても応手できるよう、既定は "both"。決定的。エントリは v2 lean。
+
+    全列挙 (generate_book) と違い ply 増でも木が緩やかにしか増えない。``on_ply`` で進捗通知。
+    """
+    if owner == "both":
+        b0 = generate_selective(max_plies, depth, 0, ai_width, opp_width, time_limit, on_ply)
+        b1 = generate_selective(max_plies, depth, 1, ai_width, opp_width, time_limit, on_ply)
+        return merge_book(b0, b1)
+
+    book: Book = {}
+    seen: set[int] = {canonical(0, 0)[0]}
+    frontier: list[Board] = [Board()]
+
+    for ply in range(max_plies + 1):
+        next_frontier: list[Board] = []
+        for board in frontier:
+            if board.is_terminal():
+                continue
+            key, t = canonical(board.bb[0], board.bb[1])
+            score, best = _engine_search(board, depth, time_limit)
+            book[key] = (COL_PERMS[t][best], score, depth, ply)
+            if ply == max_plies:
+                continue
+            width = ai_width if board.turn == owner else opp_width
+            for col in _children_to_expand(board, best, width, depth, time_limit):
+                child = board.copy()
+                child.play(col)
+                ckey = canonical(child.bb[0], child.bb[1])[0]
+                if ckey not in seen:
+                    seen.add(ckey)
+                    next_frontier.append(child)
+        if on_ply is not None:
+            on_ply(ply, len(frontier), len(book))
+        frontier = next_frontier
+
+    return book
+
+
 def book_move(book: Book, board: Board) -> tuple[int, int] | None:
     """book に board の手があれば (現局面の最善柱, score)、無ければ None。"""
     key, t = canonical(board.bb[0], board.bb[1])

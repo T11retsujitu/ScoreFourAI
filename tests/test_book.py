@@ -15,6 +15,7 @@ from score_four.book import (
     book_move,
     choose_move,
     generate_book,
+    generate_selective,
     load_book,
     merge_book,
     save_book,
@@ -167,6 +168,47 @@ def test_atomic_save_no_leftover_tmp(tmp_path: Path) -> None:
     save_book(book, tmp_path / "b.json")
     assert not any(p.suffix == ".tmp" for p in tmp_path.iterdir())
     assert load_book(tmp_path / "b.json") == book
+
+
+def test_selective_is_deterministic() -> None:
+    kw = dict(max_plies=3, depth=6, owner=0, ai_width=1, opp_width=2)
+    assert generate_selective(**kw) == generate_selective(**kw)
+
+
+def test_selective_is_smaller_than_full() -> None:
+    """選択的 book は同 max_plies の全列挙より小さい (木を絞っている)。"""
+    full = generate_book(max_plies=3, depth=6)
+    sel = generate_selective(max_plies=3, depth=6, owner=0, ai_width=1, opp_width=2)
+    assert 0 < len(sel) < len(full)
+
+
+def test_selective_entries_match_engine() -> None:
+    """選択的 book の手も、その局面を同深さで探索した最善手と一致する。"""
+    from score_four.search import search
+
+    sel = generate_selective(max_plies=3, depth=6, owner=0, ai_width=1, opp_width=2)
+    # owner=0 の principal: 空盤 (owner の手番) の最善手は探索と一致。
+    b = Board()
+    move, score = book_move(sel, b)
+    eng_score, eng_move = search(b, 6)
+    assert (move, score) == (eng_move, eng_score)
+
+
+def test_selective_principal_is_a_thin_line() -> None:
+    """ai_width=1, opp_width=1 は principal 1 本道に近く、robust(2) より小さい。"""
+    principal = generate_selective(max_plies=4, depth=6, owner=0, ai_width=1, opp_width=1)
+    robust = generate_selective(max_plies=4, depth=6, owner=0, ai_width=1, opp_width=2)
+    assert 0 < len(principal) <= len(robust)
+
+
+def test_selective_both_covers_both_sides() -> None:
+    """owner='both' は先手・後手どちらの owner 単独より広く覆う (merge)。"""
+    both = generate_selective(max_plies=3, depth=6, owner="both", ai_width=1, opp_width=2)
+    one = generate_selective(max_plies=3, depth=6, owner=0, ai_width=1, opp_width=2)
+    assert len(both) >= len(one)
+    # book の手は合法。
+    move, _ = book_move(both, Board())
+    assert move in Board().legal_moves()
 
 
 def test_committed_book_loads_if_present() -> None:
