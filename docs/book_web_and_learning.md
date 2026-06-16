@@ -1,7 +1,7 @@
-# 定石の下流活用 — 設計メモ（未実装・アイデア）
+# 定石の下流活用 — 設計メモ
 
-> 定石（opening book）を起点にした 2 つの将来構想の**設計メモ。実装はまだ行わない**。
-> 着手時はそれぞれ独立コミット＋計測で進める（[`../CLAUDE.md`](../CLAUDE.md) の原則）。
+> 定石（opening book）を起点にした下流活用。**(1) Web ロードは実装済み**、**(2) 自己学習は
+> 未実装（アイデア）**。着手時はそれぞれ独立コミット＋計測で進める（[`../CLAUDE.md`](../CLAUDE.md)）。
 > 関連: 生成は [`opening_book_windows.md`](opening_book_windows.md) / Phase 6・8・9
 > [`roadmap.md`](roadmap.md)。
 
@@ -10,10 +10,20 @@ book は **D4 正規化局面キー(u128) → (move, score, depth, ply)** の DA
 
 ---
 
-## 1. Web アプリへの book ロード
+## 1. Web アプリへの book ロード（✅ 実装済み）
 
 **目的**: WASM Web アプリ（[`../web/`](../web/)）が序盤で book を参照し、**探索せず即応**＋「定石」表示。
-現状は対局も詰み探索も WASM エンジンで動くが、book は未連携。
+
+**実装**（案 A を採用）:
+- `scripts/export_web_book.py`: `data/opening_book.json` → `web/book.json`（`{key:[move,score]}` の最小形）。
+- WASM C-ABI: `sf_book_clear` / `sf_book_add(key_lo,key_hi,mv,score)` / `sf_book_move(b0,b1)->i32` /
+  `sf_book_score(b0,b1)->i64` / `sf_book_size`（`thread_local` の `HashMap`。照会は**エンジン内部の
+  `canonical`＋`inv_col_perms`** で現局面の柱へ写すのでキー一致を保証）。
+- `engine-worker.js`: 起動時に `book.json` を fetch して `sf_book_add` で取り込み、検索要求は
+  **book を先に照会**（ヒットなら探索せず即応・`book:true`）。`app.js`: 「定石」バッジ／推奨手表示、
+  読込局面数バッジ。Python `book_move` と node で同値確認済み（299 局面）。
+
+以下は当初の設計検討（案の比較・記録）。
 
 ### 照会の所在（2 案）
 

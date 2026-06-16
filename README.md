@@ -95,7 +95,9 @@ score-four-ai/
 WebAssembly 化してブラウザ内で動かす（サーバ不要）。回せる3D盤＋4段スライス、
 柱クリックで着手、エンジンが Web Worker で応手、評価値・推奨手・脅威を表示する。
 **「詰み探索」ボタン**で現局面の強制詰み（最短手数・詰み手順）を読み切り、PV を盤上に
-ハイライトする（`sf_solve`／Phase 7・9）。公開先は GitHub Pages（`.github/workflows/pages.yml`）。
+ハイライトする（`sf_solve`／Phase 7・9）。**定石（`web/book.json`）をロードすると序盤は探索せず
+即・定石手で応じ「定石」表示**（`sf_book_*`。`scripts/export_web_book.py` で生成）。公開先は
+GitHub Pages（`.github/workflows/pages.yml`）。
 
 ```sh
 # エンジンを WASM にビルド（rustup target add wasm32-unknown-unknown が必要）

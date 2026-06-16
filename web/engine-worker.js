@@ -11,12 +11,51 @@ const ready = (async () => {
   exports = instance.exports;
 })();
 
+// 定石 (web book) を WASM へ取り込む。失敗しても探索のみで動く (graceful)。
+const bookReady = (async () => {
+  await ready;
+  if (!exports.sf_book_add) return 0; // book API が無い古い wasm
+  try {
+    const resp = await fetch("book.json");
+    if (!resp.ok) return 0;
+    const data = await resp.json();
+    exports.sf_book_clear();
+    const MASK = 0xffffffffffffffffn;
+    for (const k in data.entries) {
+      const [mv, score] = data.entries[k];
+      const key = BigInt(k);
+      exports.sf_book_add(key & MASK, key >> 64n, mv | 0, BigInt(score));
+    }
+    return exports.sf_book_size() | 0;
+  } catch (e) {
+    return 0; // book 無し → 探索のみ
+  }
+})();
+
+// 定石ロード完了をメインスレッドへ通知 (UI バッジ用)。
+bookReady.then((n) => self.postMessage({ type: "bookinfo", size: n }));
+
 self.onmessage = async (ev) => {
   const msg = ev.data;
   await ready;
   const b0 = BigInt(msg.b0);
   const b1 = BigInt(msg.b1);
   if (msg.type === "search") {
+    await bookReady;
+    // 定石にあれば探索せず即応 (序盤が一瞬で・強い)。
+    let bookMv = -1;
+    if (exports.sf_book_move) bookMv = exports.sf_book_move(b0, b1) | 0;
+    if (bookMv >= 0) {
+      self.postMessage({
+        type: "result",
+        id: msg.id,
+        reason: msg.reason,
+        score: exports.sf_book_score(b0, b1).toString(),
+        move: bookMv,
+        book: true,
+      });
+      return;
+    }
     exports.sf_search(b0, b1, msg.depth | 0);
     self.postMessage({
       type: "result",
@@ -24,6 +63,7 @@ self.onmessage = async (ev) => {
       reason: msg.reason, // 'engine' (応手) or 'analysis' (解析)
       score: exports.sf_score().toString(),
       move: exports.sf_move() | 0,
+      book: false,
     });
   } else if (msg.type === "solve") {
     // 詰み探索 (Phase 7)。status 0=unknown,1=win,2=loss,3=draw。

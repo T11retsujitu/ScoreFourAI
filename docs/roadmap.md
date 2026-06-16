@@ -117,10 +117,14 @@ Web アプリへ載せ、book を正とした自己学習の土台にする（[`
     部分木の読み直しを省く（depth10/opp4 で約1.3倍、深いほど効く）。空 Engine の search は
     `rs.search` と一致。**注意**: 共有 TT は要求より深いエントリも再利用するため結果は fresh と
     ビット一致しないことがある（妥当・生成順固定で反復可能）。既定 off（厳密再現は fresh）。
-- ⏳ 予定: **Web アプリへの book ロード**（コンパクト web book の書き出し＋JS の D4 照会 or
-  `sf_book_lookup`）、**book を正とした自己学習**（局面→最善手を policy 的に学ぶ。Phase 8 の
-  教訓に従い score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）は
-  必要になってから。**設計メモ（未実装・アイデア）**: [`book_web_and_learning.md`](book_web_and_learning.md)。
+- ◑ 済（**Web book ロード**）: `scripts/export_web_book.py` で `data/opening_book.json` →
+  `web/book.json`（最小形）。WASM C-ABI `sf_book_clear/add/move/score/size`（`thread_local`
+  HashMap・エンジン内部の `canonical`＋`inv_col_perms` で照会＝キー一致保証）。`engine-worker.js`
+  が起動時にロードし**検索前に book 照会（ヒットで即応）**、`app.js` が「定石」表示。Python
+  `book_move` と node で同値確認。詳細 [`book_web_and_learning.md`](book_web_and_learning.md) §1。
+- ⏳ 予定: **book を正とした自己学習**（局面→最善手を policy 的に学ぶ。Phase 8 の教訓に従い
+  score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）は必要に
+  なってから。設計メモ: [`book_web_and_learning.md`](book_web_and_learning.md) §2。
 
 ## Phase 7 — 詰み探索・問題生成 ◑
 

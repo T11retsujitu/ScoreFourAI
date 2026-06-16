@@ -5,11 +5,14 @@
 //! (wasm32-unknown-unknown では `std::time::Instant` が使えないため)。固定深さ探索のみ。
 //! 探索結果は sf_search が原子変数に格納し、sf_score / sf_move で取り出す。
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, AtomicI64, Ordering};
 
 use crate::board::Board;
 use crate::evaluate::{eval_with, EvalConfig};
 use crate::search;
+use crate::symmetry::{canonical, inv_col_perms};
 
 static R_SCORE: AtomicI64 = AtomicI64::new(0);
 static R_MOVE: AtomicI32 = AtomicI32::new(-1);
@@ -103,4 +106,51 @@ pub extern "C" fn sf_solve_pv(i: i32) -> i32 {
     } else {
         -1
     }
+}
+
+// --- 定石 (opening book) — Web ロード用 (Phase 6 / 9) ---------------------
+// JS が web book を sf_book_add で1件ずつ取り込み、sf_book_move/_score で照会する。
+// キーは D4 正規化キー u128 (下位/上位 u64 に分けて渡す)。move は正規形の最善柱で、
+// 照会時に inv_col_perms で現局面の柱へ写す (book.py の book_move と同じ流儀)。
+
+thread_local! {
+    static BOOK: RefCell<HashMap<u128, (u8, i64)>> = RefCell::new(HashMap::new());
+}
+
+/// 定石をクリアする (ロード開始前に呼ぶ)。
+#[no_mangle]
+pub extern "C" fn sf_book_clear() {
+    BOOK.with(|b| b.borrow_mut().clear());
+}
+
+/// 定石エントリを1件追加する。key=正規化キー u128 を (下位, 上位) u64 で、mv=正規形の柱、
+/// score=手番側視点の評価値 (D4 不変なので変換不要)。
+#[no_mangle]
+pub extern "C" fn sf_book_add(key_lo: u64, key_hi: u64, mv: u32, score: i64) {
+    let key = ((key_hi as u128) << 64) | (key_lo as u128);
+    BOOK.with(|b| b.borrow_mut().insert(key, (mv as u8, score)));
+}
+
+/// 局面 (b0,b1) が定石にあれば現局面の最善柱、無ければ -1。
+#[no_mangle]
+pub extern "C" fn sf_book_move(b0: u64, b1: u64) -> i32 {
+    let (key, t) = canonical(b0, b1);
+    BOOK.with(|b| match b.borrow().get(&key) {
+        Some(&(mv, _)) => inv_col_perms()[t][mv as usize] as i32, // 正規形 -> 現局面
+        None => -1,
+    })
+}
+
+/// 局面 (b0,b1) が定石にあればその評価値 (手番側視点)、無ければ 0。
+/// sf_book_move >= 0 のときだけ意味を持つ。
+#[no_mangle]
+pub extern "C" fn sf_book_score(b0: u64, b1: u64) -> i64 {
+    let (key, _) = canonical(b0, b1);
+    BOOK.with(|b| b.borrow().get(&key).map(|&(_, s)| s).unwrap_or(0))
+}
+
+/// ロード済み定石のエントリ数 (診断用)。
+#[no_mangle]
+pub extern "C" fn sf_book_size() -> i32 {
+    BOOK.with(|b| b.borrow().len() as i32)
 }

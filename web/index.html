@@ -25,6 +25,9 @@
   button.b:disabled{opacity:.4;cursor:default}
   select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-weight:600}
   .counter{font-family:var(--mono);font-size:.85rem;color:var(--muted);min-width:84px;text-align:center}
+  .bookbadge{font-size:.78rem;font-weight:700;color:#7a5a1c;background:#f3e2bd;border:1px solid var(--maple-grid);border-radius:6px;padding:2px 8px}
+  .bookbadge:empty{display:none}
+  .booktag{font-size:.74rem;font-weight:700;color:#fff;background:#b07d1a;border-radius:5px;padding:1px 7px;margin-left:6px}
   .toggle{display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--muted)}
   .toggle input{accent-color:var(--threat);width:16px;height:16px}
   .spacer{margin-left:auto}
@@ -119,7 +122,8 @@
       </select>
     </label>
     <label class="toggle"><input type="checkbox" id="threatToggle">脅威を表示</label>
-    <span class="counter spacer" id="counter">手 0 / 64</span>
+    <span class="bookbadge spacer" id="bookStatus"></span>
+    <span class="counter" id="counter">手 0 / 64</span>
   </div>
 
   <div class="viewtabs" role="tablist">

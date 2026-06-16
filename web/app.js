@@ -103,6 +103,12 @@ const game = {
 const worker = new Worker("engine-worker.js");
 worker.onmessage = (ev) => {
   const msg = ev.data;
+  if (msg.type === "bookinfo") {            // 定石ロード完了の通知
+    game.bookSize = msg.size | 0;
+    const el = $("bookStatus");
+    if (el) el.textContent = game.bookSize > 0 ? `定石 ${game.bookSize}局面 読込済` : "";
+    return;
+  }
   if (msg.type === "solve") {               // 詰み探索の結果 (solveSeq で照合)
     if (msg.id !== game.solveSeq) return;
     game.solving = false;
@@ -120,7 +126,7 @@ worker.onmessage = (ev) => {
     render();
     requestEngineOrAnalysis();             // 次が人間番なら解析を出す
   } else {
-    game.analysis = { score, move: msg.move };
+    game.analysis = { score, move: msg.move, book: !!msg.book };
     render();
   }
 };
@@ -443,9 +449,11 @@ function render() {
   // 評価・ヒント
   if (game.analysis && st.winner === null && !st.full) {
     const e = fmtEval(game.analysis.score, st.turn);
-    evalEl.innerHTML = `評価: <b class="${e.cls}">${e.txt}</b>`;
+    const tag = game.analysis.book ? ` <span class="booktag">定石</span>` : "";
+    evalEl.innerHTML = `評価: <b class="${e.cls}">${e.txt}</b>${tag}`;
     if (st.turn === game.humanSide && game.analysis.move >= 0) {
-      hintEl.textContent = `エンジンの推奨手: ${colName(game.analysis.move)}`;
+      const label = game.analysis.book ? "定石の手" : "エンジンの推奨手";
+      hintEl.textContent = `${label}: ${colName(game.analysis.move)}`;
     } else hintEl.textContent = "";
   } else {
     evalEl.textContent = ""; hintEl.textContent = "";
