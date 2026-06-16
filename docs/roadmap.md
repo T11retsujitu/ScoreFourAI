@@ -127,6 +127,14 @@ Web アプリへ載せ、book を正とした自己学習の土台にする（[`
   default_eval 0.426**（1-ply 線形では深い book 手を再現しきれず、調整済み評価を上回れない＝
   Phase 8/10 と同様）。エンジン統合・自己対局へは進めず。book の価値は直接照会(Web)にあると結論。
   詳細 [`book_web_and_learning.md`](book_web_and_learning.md) §2。
+- 🛠 **book 自己学習 Stage 2 パイプライン実装済・計測待ち**（`scripts/selfplay_from_book.py` →
+  `scripts/train_eval_from_selfplay.py`）: 目的を Stage 1 の「手の一致」から**「勝ち」**へ変えた
+  ユーザー案。定石を正として序盤を健全に打ち、以降 softmax 自己対局で終局まで進め、各局面に
+  **最終勝敗**を付与 → player-0 視点 `features`(NF=6) で**勝敗ロジスティック回帰**（標準化空間で
+  学習し生重みへ戻して整数量子化、バイアス破棄で符号対称維持）。`--measure` で `play_match_learned`
+  の多シード固定時間 A/B 勝率を測る。学習基盤 `learn.fit_logistic` 等は単体テスト済み。**重い計算
+  （生成・A/B）は Windows でユーザー実行**。採用は固定時間勝率で判断（線形の天井を想定・期待値は
+  managed）。詳細 [`book_web_and_learning.md`](book_web_and_learning.md) §2。
 - ⏳ 予定: リッチエントリ（pv/nodes/engine_version）は必要になってから。
 
 ## Phase 7 — 詰み探索・問題生成 ◑

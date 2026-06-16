@@ -169,3 +169,67 @@ def r2_score(x: list[list[int]], y: list[int], weights: list[float]) -> float:
     if ss_tot < 1e-12:
         return 0.0
     return 1.0 - ss_res / ss_tot
+
+
+# ---------------------------------------------------------------------------
+# 勝敗教師のロジスティック回帰 (Stage 2: book を起点にした自己対局の勝敗から評価を学ぶ)。
+# Phase 8 の score 回帰 (fit≠strength) を避け、目的を「勝ち」に揃える。特徴は同じ NF 個・
+# D4 不変・整数。学習は標準化空間で行い、生特徴の重みへ戻して量子化する (推論は整数・決定的)。
+# ---------------------------------------------------------------------------
+
+
+def standardize(x: list[list[float]]) -> tuple[list[list[float]], list[float], list[float]]:
+    """各特徴を平均0・分散1へ (条件数を整える)。(標準化X, 平均, 標準偏差) を返す。"""
+    import statistics
+
+    nf = len(x[0])
+    cols = list(zip(*x, strict=True))
+    mean = [statistics.mean(c) for c in cols]
+    std = [statistics.pstdev(c) or 1.0 for c in cols]
+    xs = [[(row[j] - mean[j]) / std[j] for j in range(nf)] for row in x]
+    return xs, mean, std
+
+
+def fit_logistic(
+    x: list[list[float]], y: list[float], epochs: int = 400, lr: float = 0.5, l2: float = 1e-3
+) -> list[float]:
+    """ロジスティック回帰 (バッチ勾配降下・L2)。y は勝=1/負=0/引分=0.5 のソフトラベル可。
+
+    返り値は重み w (バイアスは評価の手の選択に不要なので返さない)。x は標準化済みを想定。
+    """
+    import math
+
+    nf = len(x[0])
+    n = len(x)
+    w = [0.0] * nf
+    b = 0.0
+    for _ in range(epochs):
+        gw = [0.0] * nf
+        gb = 0.0
+        for xi, yi in zip(x, y, strict=True):
+            z = b + sum(w[j] * xi[j] for j in range(nf))
+            z = max(-30.0, min(30.0, z))  # オーバーフロー回避
+            p = 1.0 / (1.0 + math.exp(-z))
+            e = p - yi
+            for j in range(nf):
+                gw[j] += e * xi[j]
+            gb += e
+        for j in range(nf):
+            w[j] -= lr * (gw[j] / n + l2 * w[j])
+        b -= lr * gb / n
+    return w
+
+
+def logistic_accuracy(x: list[list[float]], y: list[float], w: list[float]) -> float:
+    """しきい 0.5 での的中率 (引分ラベル 0.5 は除外)。x/w は同じ空間 (標準化など)。"""
+    import math
+
+    hit = tot = 0
+    for xi, yi in zip(x, y, strict=True):
+        if yi == 0.5:
+            continue
+        z = max(-30.0, min(30.0, sum(w[j] * xi[j] for j in range(len(w)))))
+        p = 1.0 / (1.0 + math.exp(-z))
+        hit += int((p >= 0.5) == (yi >= 0.5))
+        tot += 1
+    return hit / tot if tot else 0.0

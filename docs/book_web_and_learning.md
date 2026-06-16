@@ -59,12 +59,43 @@ book は **D4 正規化局面キー(u128) → (move, score, depth, ply)** の DA
 
 ---
 
-## 2. book を正とした自己学習（🧪 Stage 1 診断＝no-signal）
+## 2. book を正とした自己学習（🧪 Stage 1 診断＝no-signal / 🛠 Stage 2 パイプライン実装済・計測待ち）
 
 **目的**: book（深い探索の最善手＋score）を**教師データ**に、CPU で高速・決定的に推論できる
 小モデルを学習して**固定時間での棋力**を上げる。
 
-### Stage 1 診断の結果（`scripts/learn_from_book.py`・人間対局なし）
+### Stage 2: 定石起点の自己対局 → 勝敗ロジスティック評価（🛠 実装済み・計測は Windows）
+
+Stage 1（book 最善手の move 一致 = score なしの選好学習）が no-signal だったのを受け、
+**目的を「手の一致」から「勝ち」へ変えた**ユーザー案を実装した。Phase 8 の score 回帰
+（fit≠strength）とは目的関数が異なる（勝敗 = ロジスティック）ので、Stage 1 の否定では排除されない。
+**強さは固定時間自己対戦の勝率で判断**し、勝ち越して初めて `default_eval` へ統合する（中立/悪化なら
+資産として保持）。重い計算（自己対局生成・A/B 自己対戦）は **Windows CPU でユーザーが実行**する。
+
+パイプライン（2 スクリプト + 既存 Phase 8 推論基盤を再利用）:
+
+1. **データ生成** [`../scripts/selfplay_from_book.py`](../scripts/selfplay_from_book.py):
+   定石を**正**として序盤を健全に打ち（`book_plies` 手まで、確率 `1-explore_prob` で定石最善手、
+   残りは softmax で多様化）、以降は各子局面を `gen_depth` 探索した手番側評価の **softmax(温度)**
+   でサンプルして終局まで自己対局。各**非終端**局面に**最終勝敗**ラベル（手番側視点 勝=1/負=-1/
+   引分=0）を付ける。**追記・再開可能**で原子保存（`data/selfplay.json`、format `score-four-selfplay/1`）。
+   即勝ち/負けは `score_cap` でクリップ。固定シードで決定的。
+2. **学習・計測** [`../scripts/train_eval_from_selfplay.py`](../scripts/train_eval_from_selfplay.py):
+   局面を player-0 視点 `features`（NF=6）に変換し、保存ラベルを復元手番で player-0 視点へ
+   揃えて y=勝1/負0/引分0.5 のソフトラベルに。train/holdout 分割 → **標準化空間でロジスティック
+   回帰**（`learn.fit_logistic`、バッチ GD・L2）→ 生特徴の重みへ戻して（`w/std`、**バイアスは破棄**
+   し符号対称を保つ）`quantize(q=100)` で整数化。holdout 的中率を表示し、`--measure` で
+   `rs.play_match_learned` による**多シード固定時間 A/B**（学習評価 vs 既定パリティ）勝率を測る。
+   結果は JSON 保存（`data/selfplay_eval.json`、format `score_four_selfplay_eval/1`）。
+
+学習基盤（`learn.standardize` / `fit_logistic` / `logistic_accuracy`）は単体テスト済み
+（`tests/test_learn.py`）。**採用は計測次第**: 100/200/300ms 自己対戦で `default_eval` に勝ち越し・
+多シード再現したときのみ既定へ統合し、結果（勝敗いずれも）を本メモへ記録する。
+
+> 規律メモ: Phase 8/Stage 1 の経験から線形評価には天井があると見込む。fit（holdout 的中率）が
+> 良くても強さに直結しない前提で、**winrate で判断**する。中立/悪化なら既定オフの資産として保持。
+
+### Stage 1 診断の結果（🧪 no-signal、`scripts/learn_from_book.py`・人間対局なし）
 
 エンジン統合の前に**安価で決定的な診断**を実施: book 局面（1221）を教師に「book の最善手 =
 線形評価で選べるか」を測った（14 次元 = `features`6 + `geometric_features`8、D4 不変・整数を

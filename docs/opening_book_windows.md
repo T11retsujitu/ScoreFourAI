@@ -218,6 +218,32 @@ cd web ; python -m http.server 8000   # → http://localhost:8000
 
 ---
 
+## 5.5 定石を正とした自己学習（Stage 2・実験／計測）
+
+定石を**正**として自己対局し、その**勝敗**から軽量評価をロジスティック回帰で学習する実験
+（[`book_web_and_learning.md`](book_web_and_learning.md) §2）。**重い計算（自己対局の生成・A/B
+自己対戦）は Windows CPU 向き**。採否は固定時間自己対戦の勝率で決める（fit≠strength なので
+holdout 的中率だけでは採用しない）。
+
+```powershell
+$env:PYTHONPATH = "src"
+# 1) 定石起点の自己対局で (局面, 勝敗) データを生成（追記・再開可能。何度も足せる）
+python scripts\selfplay_from_book.py --games 2000 --gen-depth 6 --out data\selfplay.json
+#    Rust 拡張があれば高速。--book-plies / --temp / --explore-prob で多様性を調整。
+#    中断しても data\selfplay.json は最後の checkpoint で有効、同じコマンドで続行。
+
+# 2) 勝敗からロジスティック評価を学習し、固定時間 A/B で計測
+python scripts\train_eval_from_selfplay.py --data data\selfplay.json `
+    --out data\selfplay_eval.json --measure --time-ms 100,300 --seeds 101,202,303
+```
+
+- `--measure` は学習評価 vs 既定パリティ評価を多シード固定時間で総当たりし、`learned winrate` を出す。
+  **0.5 を明確に超え多シードで再現**したときのみ既定統合の候補（中立/悪化なら資産として保持）。
+- データは多いほど良い（数千〜数万局）。`--min-ply` で終盤の戦術的ノイズを落とすのも可。
+- 学習・的中率だけ見たいなら `--measure` を外す（軽い）。結果 JSON に重み・的中率が残る。
+
+---
+
 ## 6. トラブルシューティング
 
 | 症状 | 対処 |

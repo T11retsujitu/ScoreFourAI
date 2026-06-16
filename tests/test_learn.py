@@ -13,9 +13,12 @@ from score_four.learn import (
     _solve,
     build_dataset,
     fit_linear,
+    fit_logistic,
+    logistic_accuracy,
     quantize,
     r2_score,
     sample_positions,
+    standardize,
 )
 
 
@@ -80,3 +83,41 @@ def test_build_dataset_drops_forced_results() -> None:
     assert len(x) == len(y)
     assert len(x) <= len(positions)
     assert all(len(row) == NF for row in x)
+
+
+def test_standardize_zero_mean_unit_std() -> None:
+    """standardize は train 統計で各列を平均0・分散1 にする (定数列は std=1)。"""
+    import statistics
+
+    x = [[1.0, 5.0], [3.0, 5.0], [5.0, 5.0], [7.0, 5.0]]
+    xs, mean, std = standardize(x)
+    cols = list(zip(*xs, strict=True))
+    assert abs(statistics.mean(cols[0])) < 1e-9
+    assert abs(statistics.pstdev(cols[0]) - 1.0) < 1e-9
+    assert std[1] == 1.0  # 定数列は 0 でなく 1 に倒す
+    assert all(v == 0.0 for v in cols[1])  # 定数列は中心化で全ゼロ
+
+
+def test_fit_logistic_separates_linearly_separable_data() -> None:
+    """線形分離可能なデータで高い的中率に達する (勾配降下が正しく収束)。"""
+    rng = random.Random(0)
+    true = [2.0, -3.0]
+    x = []
+    y = []
+    for _ in range(400):
+        row = [rng.uniform(-1.0, 1.0) for _ in range(2)]
+        x.append(row)
+        z = sum(t * v for t, v in zip(true, row, strict=True))
+        y.append(1.0 if z > 0 else 0.0)
+    w = fit_logistic(x, y, epochs=400, lr=0.5, l2=1e-4)
+    assert logistic_accuracy(x, y, w) > 0.95
+    # 学習した境界の向きが真の重みに揃う (符号一致)。
+    assert (w[0] > 0) and (w[1] < 0)
+
+
+def test_logistic_accuracy_ignores_draw_labels() -> None:
+    """引分ラベル 0.5 は的中率の母数から除外される。"""
+    x = [[1.0], [-1.0], [0.0]]
+    y = [1.0, 0.0, 0.5]  # 3 つ目は引分
+    w = [10.0]  # x>0 -> p~1, x<0 -> p~0 で 2 件とも的中
+    assert logistic_accuracy(x, y, w) == 1.0
