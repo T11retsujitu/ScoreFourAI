@@ -65,6 +65,21 @@ self.onmessage = async (ev) => {
       move: exports.sf_move() | 0,
       book: false,
     });
+  } else if (msg.type === "book") {
+    // 定石確認モード: 探索せず book のみ照会。
+    await bookReady;
+    let mv = -1, score = 0;
+    if (exports.sf_book_move) {
+      mv = exports.sf_book_move(b0, b1) | 0;
+      if (mv >= 0) score = exports.sf_book_score(b0, b1);
+    }
+    self.postMessage({
+      type: "bookresult",
+      id: msg.id,
+      move: mv,
+      score: score.toString(),
+      inBook: mv >= 0,
+    });
   } else if (msg.type === "solve") {
     // 詰み探索 (Phase 7)。status 0=unknown,1=win,2=loss,3=draw。
     exports.sf_solve(b0, b1, msg.maxPlies | 0);

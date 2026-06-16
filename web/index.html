@@ -18,7 +18,7 @@
   .wrap{max-width:960px;margin:0 auto}
   header h1{font-size:1.35rem;font-weight:800;letter-spacing:-.01em;margin:0 0 2px}
   header p{margin:0;color:var(--muted);font-size:.9rem}
-  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px}
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 16px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:0 12px 12px 12px}
   button,select{font-family:var(--sans);font-size:.85rem;cursor:pointer}
   button.b{padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-weight:700}
   button.b:hover:not(:disabled){border-color:var(--maple-grid)}
@@ -35,6 +35,10 @@
   .vt{font-size:.82rem;font-weight:600;padding:7px 14px;border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:8px;cursor:pointer}
   .vt.active{background:var(--ink);color:#fff;border-color:var(--ink)}
   .vt:disabled{opacity:.4;cursor:default}
+  .modetabs{display:flex;gap:6px;margin:16px 0 0}
+  .mt{font-size:.9rem;font-weight:700;padding:9px 20px;border:1px solid var(--line);border-bottom:none;background:#f1ead9;color:var(--muted);border-radius:10px 10px 0 0;cursor:pointer}
+  .mt.active{background:var(--win);color:#fff;border-color:var(--win)}
+  .offbook{color:var(--muted);font-size:.88rem}
 
   .stage{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
   .left{flex:1 1 460px;min-width:300px}
@@ -74,6 +78,7 @@
   button.drop:disabled{opacity:.4;cursor:default}
   button.drop.hint{border-color:var(--hint);box-shadow:0 0 0 1px var(--hint)}
   button.drop.mate{border-color:var(--mate);box-shadow:0 0 0 1px var(--mate)}
+  button.drop.bookrec{border-color:var(--win);box-shadow:0 0 0 2px var(--win);background:#fdf3dc}
 
   .info{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
   .status{font-size:.95rem;margin-bottom:8px}
@@ -104,13 +109,21 @@
 <div class="wrap">
   <header>
     <h1>立体4目並べ — エンジンと対局</h1>
-    <p>4×4×4・重力あり（Score Four）。柱を選んで落とすと、Rust製エンジン（WASM）が応手します。
-       「詰み探索」で現局面の強制詰み（最短手数と詰み手順）を読み切れます。</p>
+    <p>4×4×4・重力あり（Score Four）。Rust製エンジン（WASM）と<b>対局</b>、自由に並べて評価を見る
+       <b>検討</b>、定石を辿る<b>定石確認</b>の3モード。「詰み探索」で強制詰みも読み切れます。</p>
   </header>
+
+  <div class="modetabs" role="tablist">
+    <button id="mode-play" class="mt active">対局</button>
+    <button id="mode-study" class="mt" title="自由に両方を指して評価・最善手を見る">検討</button>
+    <button id="mode-book" class="mt" title="定石を辿って確認する">定石確認</button>
+  </div>
 
   <div class="controls">
     <button class="b" id="btnNewBlack">新規（自分が先手・黒）</button>
     <button class="b" id="btnNewWhite">新規（自分が後手・生成り）</button>
+    <button class="b" id="btnReset" style="display:none">初期局面</button>
+    <button class="b" id="btnBookNext" style="display:none" title="定石の推奨手で1手進む">定石手で進む ▶</button>
     <button class="b" id="btnUndo">待った</button>
     <button class="b" id="btnSolve" title="現局面に強制詰みがあるか読み切ります">詰み探索</button>
     <label class="toggle">強さ

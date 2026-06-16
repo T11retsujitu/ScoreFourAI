@@ -87,13 +87,15 @@ function pvCells(heights, pv) {
 /* ====== ゲーム状態 ====== */
 const game = {
   history: [],
-  humanSide: 0,       // 0=先手(黒) / 1=後手(生成り)
+  mode: "play",       // "play"=対局 / "study"=検討 / "book"=定石確認
+  humanSide: 0,       // 0=先手(黒) / 1=後手(生成り)  (対局モードのみ)
   depth: 8,
   showThreat: false,
   viewMode: "3d",
   thinking: false,
   reqId: 0,
-  analysis: null,     // {score, move} 現局面のエンジン評価
+  analysis: null,     // {score, move, book} 現局面のエンジン評価
+  bookInfo: null,     // {move, score, inBook} 定石確認モードの照会結果
   solving: false,
   solveSeq: 0,
   mate: null,         // 詰み探索結果 {status, plies, move, pv, turn} (現局面のもの)
@@ -118,23 +120,35 @@ worker.onmessage = (ev) => {
     return;
   }
   if (msg.id !== game.reqId) return;       // 古い結果は無視
+  if (msg.type === "bookresult") {          // 定石確認モードの照会結果
+    game.bookInfo = { move: msg.move, score: Number(BigInt(msg.score)), inBook: !!msg.inBook };
+    render();
+    return;
+  }
   game.thinking = false;
   const score = Number(BigInt(msg.score));
   if (msg.reason === "engine") {
     if (msg.move >= 0) game.history.push(msg.move);
     game.analysis = null;
     render();
-    requestEngineOrAnalysis();             // 次が人間番なら解析を出す
+    refresh();                             // 次が人間番なら解析を出す
   } else {
     game.analysis = { score, move: msg.move, book: !!msg.book };
     render();
   }
 };
 
-function requestEngineOrAnalysis() {
+// 現局面について、モードに応じてエンジン応手 / 解析 / 定石照会を要求する。
+function refresh() {
   const st = replay(game.history);
   if (st.winner !== null || st.full) { game.thinking = false; render(); return; }
-  const reason = st.turn === game.humanSide ? "analysis" : "engine";
+  if (game.mode === "book") {              // 定石確認: 探索せず book 照会
+    game.reqId++;
+    worker.postMessage({ type: "book", id: game.reqId, b0: st.b0.toString(), b1: st.b1.toString() });
+    return;
+  }
+  // 対局: 自分の番は解析・相手番はエンジン応手 / 検討: 常に解析
+  const reason = (game.mode === "play" && st.turn !== game.humanSide) ? "engine" : "analysis";
   game.thinking = (reason === "engine");
   game.reqId++;
   worker.postMessage({
@@ -161,33 +175,63 @@ function requestSolve() {
 }
 function drop(col) {
   const st = replay(game.history);
-  if (st.winner !== null || st.full) return;
-  if (st.turn !== game.humanSide) return;        // 人間の番のみ
+  if (st.winner !== null || st.full || game.thinking) return;
   if (st.heights[col] >= 4) return;
+  if (game.mode === "play" && st.turn !== game.humanSide) return;  // 対局は自分の番のみ
   game.history.push(col);
-  game.analysis = null; clearMate();
+  game.analysis = null; game.bookInfo = null; clearMate();
   render();
-  requestEngineOrAnalysis();
+  refresh();
 }
-function newGame(humanSide) {
-  game.history = []; game.humanSide = humanSide; game.analysis = null; game.thinking = false;
-  clearMate();
-  game.reqId++;
+function newGame(humanSide) {                     // 対局モードで新規対局 (先後を選ぶ)
+  setMode("play");
+  game.history = []; game.humanSide = humanSide;
+  game.analysis = null; game.bookInfo = null; game.thinking = false;
+  clearMate(); game.reqId++;
   render();
-  requestEngineOrAnalysis();                      // エンジン先手なら初手を指す
+  refresh();                                      // エンジン先手なら初手を指す
+}
+function resetBoard() {                           // 検討/定石確認: 初期局面に戻す (モード維持)
+  game.history = []; game.analysis = null; game.bookInfo = null; game.thinking = false;
+  clearMate(); game.reqId++;
+  render();
+  refresh();
 }
 function undo() {
-  // 人間とエンジンの2手を戻す (人間の手番に戻す)。
   if (game.thinking) return;
   if (game.history.length === 0) return;
   game.history.pop();
-  const st = replay(game.history);
-  if (st.winner === null && !st.full && st.turn !== game.humanSide && game.history.length > 0) {
-    game.history.pop();
+  if (game.mode === "play") {
+    // 対局は人間+エンジンの2手を戻す (人間の手番に戻す)。
+    const st = replay(game.history);
+    if (st.winner === null && !st.full && st.turn !== game.humanSide && game.history.length > 0) {
+      game.history.pop();
+    }
   }
-  game.analysis = null; clearMate(); game.reqId++;
+  game.analysis = null; game.bookInfo = null; clearMate(); game.reqId++;
   render();
-  requestEngineOrAnalysis();
+  refresh();
+}
+function setMode(mode) {                          // モード切替 (局面は保持して解析/照会し直す)
+  game.mode = (mode === "study" || mode === "book") ? mode : "play";
+  if (game.mode === "play") {                     // 対局へ: 今の手番側を人間にする (即応手させない)
+    game.humanSide = replay(game.history).turn;
+  }
+  game.thinking = false; game.analysis = null; game.bookInfo = null; clearMate(); game.reqId++;
+  ["play", "study", "book"].forEach((m) =>
+    $("mode-" + m).classList.toggle("active", game.mode === m));
+  // 対局のみ「新規(先後)」、検討/定石は「初期局面」を出す。
+  const play = game.mode === "play";
+  $("btnNewBlack").style.display = play ? "" : "none";
+  $("btnNewWhite").style.display = play ? "" : "none";
+  $("btnReset").style.display = play ? "none" : "";
+  $("btnBookNext").style.display = game.mode === "book" ? "" : "none";
+  render();
+  refresh();
+}
+function playBookMove() {                          // 定石確認: 推奨手で1手進む
+  if (game.mode !== "book" || !game.bookInfo || !game.bookInfo.inBook) return;
+  drop(game.bookInfo.move);
 }
 
 /* ====== 3D (three.js r128) ====== */
@@ -377,15 +421,20 @@ function renderSlices(st) {
 /* ====== ドロップ用 4x4 グリッド (確実な入力手段) ====== */
 function renderDropGrid(st) {
   const el = $("dropGrid"); el.innerHTML = "";
-  const playable = st.winner === null && !st.full && st.turn === game.humanSide && !game.thinking;
+  const live = st.winner === null && !st.full && !game.thinking;
+  // 対局は自分の番のみ、検討/定石確認は手番側ならどちらも置ける。
+  const playable = live && (game.mode === "play" ? st.turn === game.humanSide : true);
+  // 推奨手 (定石確認は book 手、それ以外はエンジン解析手)。
+  const recMove = game.mode === "book"
+    ? (game.bookInfo && game.bookInfo.inBook ? game.bookInfo.move : -1)
+    : (game.analysis ? game.analysis.move : -1);
   for (let y = 3; y >= 0; y--) {
     for (let x = 0; x < 4; x++) {
       const c = y * 4 + x;
       const b = document.createElement("button");
       b.className = "drop";
       b.innerHTML = `<span class="dn">${colName(c)}</span><span class="dh">${st.heights[c]}/4</span>`;
-      const hint = game.analysis && game.analysis.move === c;
-      if (hint) b.classList.add("hint");
+      if (recMove === c) b.classList.add(game.mode === "book" ? "bookrec" : "hint");
       if (game.mate && (game.mate.status === 1 || game.mate.status === 2) && game.mate.move === c) {
         b.classList.add("mate");
       }
@@ -430,29 +479,49 @@ function render() {
   $("counter").textContent = `手 ${game.history.length} / 64`;
   $("btnUndo").disabled = game.history.length === 0 || game.thinking;
   $("btnSolve").disabled = game.thinking || game.solving || st.winner !== null || st.full;
+  $("btnBookNext").disabled =
+    !(game.mode === "book" && game.bookInfo && game.bookInfo.inBook && st.winner === null && !st.full);
 
   const sideName = (p) => p === 0 ? "先手（黒）" : "後手（生成り）";
+  const dot = (p) => `<span class="dot ${p === 0 ? "p1" : "p2"}"></span>`;
   if (st.winner !== null) {
     const w = st.winner;
     statusEl.innerHTML = `<span class="badge ${w === 0 ? "p1" : "p2"}">${sideName(w)}の勝ち</span>` +
-      (w === game.humanSide ? "  あなたの勝ちです！" : "  エンジンの勝ちです。");
+      (game.mode === "play" ? (w === game.humanSide ? "  あなたの勝ちです！" : "  エンジンの勝ちです。") : "");
   } else if (st.full) {
     statusEl.innerHTML = `<span class="badge">引き分け</span>`;
   } else if (game.thinking) {
     statusEl.innerHTML = `<span class="thinking">エンジン思考中…</span>`;
+  } else if (game.mode !== "play") {
+    const label = game.mode === "study" ? "検討モード" : "定石確認モード";
+    statusEl.innerHTML = `<span class="turn">${dot(st.turn)}${label} — 手番: ${sideName(st.turn)}（両方指せます）</span>`;
   } else if (st.turn === game.humanSide) {
-    statusEl.innerHTML = `<span class="turn"><span class="dot ${st.turn === 0 ? "p1" : "p2"}"></span>あなた（${sideName(st.turn)}）の番 — 柱を選んでください</span>`;
+    statusEl.innerHTML = `<span class="turn">${dot(st.turn)}あなた（${sideName(st.turn)}）の番 — 柱を選んでください</span>`;
   } else {
-    statusEl.innerHTML = `<span class="turn"><span class="dot ${st.turn === 0 ? "p1" : "p2"}"></span>エンジン（${sideName(st.turn)}）の番</span>`;
+    statusEl.innerHTML = `<span class="turn">${dot(st.turn)}エンジン（${sideName(st.turn)}）の番</span>`;
   }
 
-  // 評価・ヒント
-  if (game.analysis && st.winner === null && !st.full) {
+  // 評価・ヒント (モード別)
+  const live = st.winner === null && !st.full;
+  if (game.mode === "book") {                       // 定石確認: book 照会結果
+    if (game.bookInfo && live) {
+      if (game.bookInfo.inBook) {
+        const e = fmtEval(game.bookInfo.score, st.turn);
+        evalEl.innerHTML = `定石評価: <b class="${e.cls}">${e.txt}</b> <span class="booktag">定石</span>`;
+        hintEl.textContent = `定石手: ${colName(game.bookInfo.move)}`;
+      } else {
+        evalEl.innerHTML = `<span class="offbook">定石外（この局面は定石にありません）</span>`;
+        hintEl.textContent = "";
+      }
+    } else { evalEl.textContent = ""; hintEl.textContent = ""; }
+  } else if (game.analysis && live) {               // 対局/検討: エンジン評価
     const e = fmtEval(game.analysis.score, st.turn);
     const tag = game.analysis.book ? ` <span class="booktag">定石</span>` : "";
     evalEl.innerHTML = `評価: <b class="${e.cls}">${e.txt}</b>${tag}`;
-    if (st.turn === game.humanSide && game.analysis.move >= 0) {
-      const label = game.analysis.book ? "定石の手" : "エンジンの推奨手";
+    const showHint = game.mode === "study" || st.turn === game.humanSide;
+    if (showHint && game.analysis.move >= 0) {
+      const label = game.analysis.book ? "定石の手"
+        : (game.mode === "study" ? "最善手" : "エンジンの推奨手");
       hintEl.textContent = `${label}: ${colName(game.analysis.move)}`;
     } else hintEl.textContent = "";
   } else {
@@ -496,8 +565,13 @@ function setView(mode) {
 
 /* ====== 配線 ====== */
 function wire() {
+  $("mode-play").addEventListener("click", () => setMode("play"));
+  $("mode-study").addEventListener("click", () => setMode("study"));
+  $("mode-book").addEventListener("click", () => setMode("book"));
   $("btnNewBlack").addEventListener("click", () => newGame(0));
   $("btnNewWhite").addEventListener("click", () => newGame(1));
+  $("btnReset").addEventListener("click", resetBoard);
+  $("btnBookNext").addEventListener("click", playBookMove);
   $("btnUndo").addEventListener("click", undo);
   $("btnSolve").addEventListener("click", requestSolve);
   $("depthSel").addEventListener("change", (e) => { game.depth = parseInt(e.target.value, 10); });
