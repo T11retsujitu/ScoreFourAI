@@ -122,9 +122,12 @@ Web アプリへ載せ、book を正とした自己学習の土台にする（[`
   HashMap・エンジン内部の `canonical`＋`inv_col_perms` で照会＝キー一致保証）。`engine-worker.js`
   が起動時にロードし**検索前に book 照会（ヒットで即応）**、`app.js` が「定石」表示。Python
   `book_move` と node で同値確認。詳細 [`book_web_and_learning.md`](book_web_and_learning.md) §1。
-- ⏳ 予定: **book を正とした自己学習**（局面→最善手を policy 的に学ぶ。Phase 8 の教訓に従い
-  score 回帰でなく move 一致＋自己対局で検証）。リッチ化（pv/nodes/engine_version）は必要に
-  なってから。設計メモ: [`book_web_and_learning.md`](book_web_and_learning.md) §2。
+- 🧪 **book 自己学習 Stage 1 診断＝no-signal**（`scripts/learn_from_book.py`）: book(1221局面)を
+  教師に「最善手を選べる線形評価」を選好学習したが、move 一致率 holdout **0.357 < 既存
+  default_eval 0.426**（1-ply 線形では深い book 手を再現しきれず、調整済み評価を上回れない＝
+  Phase 8/10 と同様）。エンジン統合・自己対局へは進めず。book の価値は直接照会(Web)にあると結論。
+  詳細 [`book_web_and_learning.md`](book_web_and_learning.md) §2。
+- ⏳ 予定: リッチエントリ（pv/nodes/engine_version）は必要になってから。
 
 ## Phase 7 — 詰み探索・問題生成 ◑
 
